@@ -4,6 +4,14 @@ Switcheroo is a small macOS menu bar app + CLI for **manual** Codex account fail
 
 Use case: you have multiple legit Codex accounts already authenticated locally, and you want a fast toggle when one account hits an auth/service outage (401/5xx/timeouts).
 
+The codebase is split into a layered SwiftPM package:
+
+- `SwitcherooCore` for provider-agnostic orchestration and protocols
+- `SwitcherooPresentation` for shared app state/actions
+- `SwitcherooCodexProvider` for the built-in Codex adapter
+- `SwitcherooMacAdapters` for macOS config/keychain/process integrations
+- `SwitcherooDefaultApp` for shared shell wiring
+
 Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, or plan selection. It just swaps the active local `auth.json` used by the Codex app/CLI.
 
 Not affiliated with OpenAI.
@@ -26,7 +34,7 @@ Docs:
 - macOS 13 (Ventura) or later
 - `codex` CLI installed and working in your shell
 
-## Install
+## Build
 
 Right now this repo ships source-first.
 
@@ -34,6 +42,11 @@ Build CLI:
 ```bash
 swift build -c release --product switcheroo
 ./.build/release/switcheroo list
+```
+
+Run the menu bar app in development:
+```bash
+swift run SwitcherooMenuBar
 ```
 
 Build the menu bar `.app` bundle:

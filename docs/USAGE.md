@@ -5,7 +5,7 @@ Switcheroo supports two front-ends:
 - Menu bar app: `SwitcherooMenuBar` (built into `dist/Switcheroo.app`)
 - CLI: `switcheroo`
 
-The underlying behavior is the same: Switcheroo stores per-account snapshots of Codex `auth.json`, and swaps the active `auth.json` when you switch accounts.
+The underlying behavior is the same: Switcheroo stores per-account snapshots of Codex `auth.json`, and swaps the active `auth.json` when you switch accounts. The current build ships with a Codex provider, but the app is structured so other providers can be added in code later.
 
 ## Menu Bar App
 
@@ -50,7 +50,7 @@ Commands:
 
 Notes:
 
-- `switcheroo add` runs `codex login` with a per-account `CODEX_HOME` so Codex writes a fresh `auth.json` for that login. Switcheroo then imports that `auth.json` snapshot and deletes the temporary `CODEX_HOME` directory.
+- `switcheroo add` runs `codex login` with a per-account provider home so Codex writes a fresh `auth.json` for that login. Switcheroo then imports that `auth.json` snapshot and deletes the temporary provider home directory.
 - `switcheroo sync` is best-effort; it does not “refresh” tokens itself. It only re-saves whatever Codex has currently written to `auth.json`.
 
 ## When To Use Switcheroo

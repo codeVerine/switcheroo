@@ -2,7 +2,15 @@
 
 ## Build
 
-This is a SwiftPM package.
+This is a SwiftPM package with layered targets:
+
+- `SwitcherooCore`
+- `SwitcherooPresentation`
+- `SwitcherooCodexProvider`
+- `SwitcherooMacAdapters`
+- `SwitcherooDefaultApp`
+- `switcheroo`
+- `SwitcherooMenuBar`
 
 CLI:
 
@@ -16,6 +24,8 @@ Menu bar app (dev run):
 ```bash
 swift run SwitcherooMenuBar
 ```
+
+If you need to inspect the modular targets directly, `swift package describe` will show the package graph.
 
 ## Bundle A `.app`
 
@@ -43,4 +53,3 @@ Switcheroo uses Apple Unified Logging (`OSLog`) with subsystem `com.switcheroo`.
 ```bash
 log stream --predicate 'subsystem == "com.switcheroo"' --style compact
 ```
-
