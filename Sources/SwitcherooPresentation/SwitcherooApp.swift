@@ -19,6 +19,7 @@ public struct SwitcherooAppState: Sendable {
     public var accounts: [SwitcherooAccount]
     public var activeAccountId: String?
     public var statusText: String
+    public var accessTokenExpiryByAccountId: [String: Date]
 
     public var pendingLogin: PendingLogin?
     public var pendingHint: String?
@@ -30,6 +31,7 @@ public struct SwitcherooAppState: Sendable {
         accounts: [SwitcherooAccount] = [],
         activeAccountId: String? = nil,
         statusText: String = "No active account",
+        accessTokenExpiryByAccountId: [String: Date] = [:],
         pendingLogin: PendingLogin? = nil,
         pendingHint: String? = nil
     ) {
@@ -39,6 +41,7 @@ public struct SwitcherooAppState: Sendable {
         self.accounts = accounts
         self.activeAccountId = activeAccountId
         self.statusText = statusText
+        self.accessTokenExpiryByAccountId = accessTokenExpiryByAccountId
         self.pendingLogin = pendingLogin
         self.pendingHint = pendingHint
     }
@@ -62,6 +65,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             let providerId = resolveSelectedProviderId()
             let accounts = try engine.listAccounts(providerId: providerId)
             let activeId = try engine.activeAccount(providerId: providerId)?.id
+            let expiryById = (try? engine.accessTokenExpiryByAccountId(providerId: providerId)) ?? [:]
 
             let statusText = activeId.flatMap { id in
                 accounts.first(where: { $0.id == id })?.name
@@ -72,6 +76,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.accounts = accounts
             state.activeAccountId = activeId
             state.statusText = statusText
+            state.accessTokenExpiryByAccountId = expiryById
             lock.unlock()
         } catch {
             lock.lock()
@@ -107,6 +112,22 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
+    public func startAddAccount() {
+        do {
+            let providerId = resolveSelectedProviderId()
+            let pending = try engine.startAddAccount(providerId: providerId)
+
+            lock.lock()
+            state.pendingLogin = pending
+            state.pendingHint = "Complete login, then Switcheroo will import it."
+            lock.unlock()
+        } catch {
+            lock.lock()
+            state.errorMessage = errorMessage(from: error)
+            lock.unlock()
+        }
+    }
+
     public func importCurrentAccount(name: String) {
         do {
             let providerId = resolveSelectedProviderId()
@@ -116,6 +137,21 @@ public final class SwitcherooApp: @unchecked Sendable {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
             lock.unlock()
+        }
+    }
+
+    @discardableResult
+    public func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccount? {
+        do {
+            let providerId = resolveSelectedProviderId()
+            let acc = try engine.importCurrentAccountWithDerivedName(providerId: providerId, setActiveIfFirst: setActiveIfFirst)
+            refresh()
+            return acc
+        } catch {
+            lock.lock()
+            state.errorMessage = errorMessage(from: error)
+            lock.unlock()
+            return nil
         }
     }
 
@@ -134,6 +170,26 @@ public final class SwitcherooApp: @unchecked Sendable {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
             lock.unlock()
+        }
+    }
+
+    public func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccount? {
+        guard let pending = withState({ $0.pendingLogin }) else { return nil }
+        guard fileIO.fileExists(path: pending.expectedAuthFilePath) else { return nil }
+
+        do {
+            let acc = try engine.finalizeAddAccountWithDerivedName(pending, setActiveIfFirst: setActiveIfFirst)
+            lock.lock()
+            state.pendingLogin = nil
+            state.pendingHint = nil
+            lock.unlock()
+            refresh()
+            return acc
+        } catch {
+            lock.lock()
+            state.errorMessage = errorMessage(from: error)
+            lock.unlock()
+            return nil
         }
     }
 
@@ -167,6 +223,18 @@ public final class SwitcherooApp: @unchecked Sendable {
             _ = try engine.syncActiveAccountSnapshotIfNeeded(providerId: providerId)
         } catch {
             // Best-effort; ignore.
+        }
+    }
+
+    public func renameAccount(accountId: String, newName: String) {
+        do {
+            let providerId = resolveSelectedProviderId()
+            try engine.renameAccount(providerId: providerId, accountId: accountId, newName: newName)
+            refresh()
+        } catch {
+            lock.lock()
+            state.errorMessage = errorMessage(from: error)
+            lock.unlock()
         }
     }
 

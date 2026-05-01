@@ -5,7 +5,9 @@ import SwitcherooPresentation
 @MainActor
 final class AppModel: ObservableObject {
     @Published var state: SwitcherooAppState
-    @Published var newAccountName: String = ""
+    @Published var renameDraftAccountId: String? = nil
+    @Published var renameDraftText: String = ""
+    @Published var renameDraftPlaceholder: String = ""
 
     private let app: SwitcherooApp?
     private var pollTimer: Timer?
@@ -31,21 +33,17 @@ final class AppModel: ObservableObject {
     }
 
     func startAddAccount() {
-        let name = newAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
         guard let app else { return }
-        app.startAddAccount(name: name)
-        newAccountName = ""
+        app.startAddAccount()
         state = app.snapshot()
         startPendingPoll()
     }
 
     func importCurrentAccount() {
-        let name = newAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
         guard let app else { return }
-        app.importCurrentAccount(name: name)
-        newAccountName = ""
+        if let acc = app.importCurrentAccount(setActiveIfFirst: true) {
+            beginRenameDraft(accountId: acc.id, placeholder: acc.name)
+        }
         state = app.snapshot()
     }
 
@@ -63,7 +61,12 @@ final class AppModel: ObservableObject {
 
     func finalizePendingIfReady(setActive: Bool) {
         guard let app else { return }
-        app.finalizePendingIfReady(setActive: setActive)
+        if let acc = app.finalizePendingIfReady(setActiveIfFirst: true) {
+            beginRenameDraft(accountId: acc.id, placeholder: acc.name)
+        } else {
+            // For legacy call sites (CLI-style), still support explicit setActive.
+            app.finalizePendingIfReady(setActive: setActive)
+        }
         let next = app.snapshot()
         state = next
         if next.pendingLogin == nil {
@@ -74,6 +77,31 @@ final class AppModel: ObservableObject {
     func syncActiveSnapshot() {
         guard let app else { return }
         app.syncActiveSnapshot()
+    }
+
+    func cancelRenameDraft() {
+        renameDraftAccountId = nil
+        renameDraftText = ""
+        renameDraftPlaceholder = ""
+    }
+
+    func saveRenameDraft() {
+        guard let app else { return }
+        guard let accountId = renameDraftAccountId else { return }
+
+        let typed = renameDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = typed.isEmpty ? renameDraftPlaceholder : typed
+        guard !name.isEmpty else { return }
+
+        app.renameAccount(accountId: accountId, newName: name)
+        cancelRenameDraft()
+        state = app.snapshot()
+    }
+
+    private func beginRenameDraft(accountId: String, placeholder: String) {
+        renameDraftAccountId = accountId
+        renameDraftText = ""
+        renameDraftPlaceholder = placeholder
     }
 
     private func startPendingPoll() {

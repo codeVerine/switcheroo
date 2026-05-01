@@ -91,6 +91,52 @@ public final class SwitcherooEngine: @unchecked Sendable {
         try? paths.removeItem(path: pending.providerHomePath)
     }
 
+    // UI-focused helper: create an account without asking for a name up-front.
+    // Name is derived from the auth.json snapshot after login/import.
+    public func startAddAccount(providerId: String? = nil) throws -> PendingLogin {
+        try startAddAccount(providerId: providerId, name: "New account")
+    }
+
+    public func finalizeAddAccountWithDerivedName(_ pending: PendingLogin, setActiveIfFirst: Bool) throws -> SwitcherooAccount {
+        let provider = try requireProvider(pending.providerId)
+
+        let authData = try fileIO.readFile(path: pending.expectedAuthFilePath)
+        guard !authData.isEmpty else {
+            throw SwitcherooError.invalidAuthFile(path: pending.expectedAuthFilePath)
+        }
+
+        try secureStore.store(authData, key: secureStoreKey(providerId: provider.id, accountId: pending.accountId))
+
+        var next = withConfig { $0 }
+        if next.defaultProviderId == nil {
+            next.defaultProviderId = provider.id
+        }
+
+        var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+        let shouldSetActive = setActiveIfFirst && providerState.accounts.isEmpty
+
+        let derivedName = defaultAccountName(fromAuthData: authData)
+        var account = SwitcherooAccount(id: pending.accountId, name: derivedName)
+        account.lastUsedAt = shouldSetActive ? Date() : nil
+        providerState.accounts.append(account)
+
+        if shouldSetActive {
+            providerState.activeAccountId = pending.accountId
+            try fileIO.writeFileAtomically(
+                authData,
+                path: activeAuthFilePath(providerState: providerState, provider: provider),
+                permissions: 0o600
+            )
+        }
+
+        next.providers.removeAll(where: { $0.id == provider.id })
+        next.providers.append(providerState)
+        try persist(next)
+
+        try? paths.removeItem(path: pending.providerHomePath)
+        return account
+    }
+
     public func importCurrentAccount(providerId: String? = nil, name: String, setActive: Bool) throws -> SwitcherooAccount {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)
@@ -116,6 +162,77 @@ public final class SwitcherooEngine: @unchecked Sendable {
         try persist(next)
 
         return account
+    }
+
+    public func importCurrentAccountWithDerivedName(providerId: String? = nil, setActiveIfFirst: Bool) throws -> SwitcherooAccount {
+        let pid = try resolveProviderId(providerId)
+        let provider = try requireProvider(pid)
+
+        var next = withConfig { $0 }
+        if next.defaultProviderId == nil {
+            next.defaultProviderId = provider.id
+        }
+
+        var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+        let data = try readActiveAuthData(providerState: providerState, provider: provider)
+
+        let derivedName = defaultAccountName(fromAuthData: data)
+        let shouldSetActive = setActiveIfFirst && providerState.accounts.isEmpty
+
+        var account = SwitcherooAccount(name: derivedName)
+        try secureStore.store(data, key: secureStoreKey(providerId: provider.id, accountId: account.id))
+        if shouldSetActive {
+            account.lastUsedAt = Date()
+            providerState.activeAccountId = account.id
+        }
+        providerState.accounts.append(account)
+
+        next.providers.removeAll(where: { $0.id == provider.id })
+        next.providers.append(providerState)
+        try persist(next)
+
+        return account
+    }
+
+    public func renameAccount(providerId: String? = nil, accountId: String, newName: String) throws {
+        let pid = try resolveProviderId(providerId)
+        let provider = try requireProvider(pid)
+
+        var next = withConfig { $0 }
+        var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+
+        guard providerState.accounts.contains(where: { $0.id == accountId }) else {
+            throw SwitcherooError.accountNotFound
+        }
+
+        providerState.accounts = providerState.accounts.map { acc in
+            var copy = acc
+            if copy.id == accountId {
+                copy.name = newName
+            }
+            return copy
+        }
+
+        next.providers.removeAll(where: { $0.id == provider.id })
+        next.providers.append(providerState)
+        try persist(next)
+    }
+
+    public func accessTokenExpiryByAccountId(providerId: String? = nil) throws -> [String: Date] {
+        let pid = try resolveProviderId(providerId)
+        let provider = try requireProvider(pid)
+        let providerState = providerConfig(providerId: provider.id)
+
+        var result: [String: Date] = [:]
+        for acc in providerState.accounts {
+            guard let data = try? secureStore.load(key: secureStoreKey(providerId: provider.id, accountId: acc.id)) else {
+                continue
+            }
+            guard let summary = CodexAuthParsing.summarize(authJSONData: data) else { continue }
+            guard let exp = summary.accessTokenExpiry else { continue }
+            result[acc.id] = exp
+        }
+        return result
     }
 
     public func switchToAccount(providerId: String? = nil, accountIdOrName: String) throws {
@@ -241,6 +358,21 @@ public final class SwitcherooEngine: @unchecked Sendable {
 
     private func secureStoreKey(providerId: String, accountId: String) -> String {
         "\(providerId):\(accountId)"
+    }
+
+    private func defaultAccountName(fromAuthData authData: Data) -> String {
+        if let summary = CodexAuthParsing.summarize(authJSONData: authData) {
+            if let email = summary.email, !email.isEmpty { return email }
+            if let accountId = summary.accountId, !accountId.isEmpty { return accountId }
+        }
+        return "Imported \(formattedNow())"
+    }
+
+    private func formattedNow() -> String {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyy-MM-dd HH:mm"
+        return fmt.string(from: Date())
     }
 
     private func persist(_ updated: SwitcherooConfig) throws {

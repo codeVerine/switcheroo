@@ -11,6 +11,8 @@ This document explains what is stored, where it is stored, and what Switcheroo d
 
 Switcheroo does not attempt to parse, interpret, or modify the contents of `auth.json` beyond copying bytes. If Codex changes the file format, Switcheroo should continue working as long as the file remains a single JSON file that Codex consumes.
 
+Note: the menu-bar UI may perform best-effort, local-only parsing of the stored `auth.json` snapshot to show non-sensitive metadata (for example, access token expiry) and to derive a reasonable default account name (typically an email from the `id_token`). Switcheroo still stores and swaps the full file as opaque bytes.
+
 ## What Is In `auth.json` (Typical)
 
 Switcheroo treats `auth.json` as opaque. For reference only: as of May 1, 2026, the `~/.codex/auth.json` observed on the author’s machine had top-level keys:
