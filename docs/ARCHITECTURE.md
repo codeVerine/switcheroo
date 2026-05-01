@@ -1,12 +1,16 @@
 # Architecture
 
-Switcheroo is a single SwiftPM package with three targets:
+Switcheroo is a single SwiftPM package with layered targets:
 
 - `SwitcherooCore` (library)
-- `switcheroo` (CLI)
-- `SwitcherooMenuBar` (menu bar app)
+- `SwitcherooPresentation` (library)
+- `SwitcherooCodexProvider` (library, built-in provider)
+- `SwitcherooMacAdapters` (library, macOS adapters)
+- `SwitcherooDefaultApp` (library, composition root)
+- `switcheroo` (CLI executable)
+- `SwitcherooMenuBar` (menu bar executable)
 
-The core library owns all stateful behavior: config I/O, Keychain I/O, swapping `auth.json`, and login orchestration.
+The design goal is to keep the domain and presentation layers provider- and platform-agnostic, and push macOS/Codex specifics behind protocols.
 
 ## Core Flow
 
@@ -14,7 +18,7 @@ The core library owns all stateful behavior: config I/O, Keychain I/O, swapping 
 
 1. Create an account id.
 2. Create a temporary `CODEX_HOME` directory under:
-   - `~/Library/Application Support/Switcheroo/login/<account-id>/`
+   - `~/Library/Application Support/Switcheroo/login/<provider>/<account-id>/`
 3. Run `codex login` with that `CODEX_HOME` so Codex writes a fresh `auth.json`.
 4. Import that `auth.json` snapshot into Keychain under the account id.
 5. Delete the temporary `CODEX_HOME` directory.
@@ -36,14 +40,17 @@ The menu bar app runs `sync` on a timer (best-effort) and exposes a â€œSync Nowâ
 
 ## Key Types / Files
 
-- [Sources/SwitcherooCore/SwitcherooService.swift](../Sources/SwitcherooCore/SwitcherooService.swift)
-  - The central coordinator.
-- [Sources/SwitcherooCore/ConfigStore.swift](../Sources/SwitcherooCore/ConfigStore.swift)
-  - Reads/writes `config.json`.
-- [Sources/SwitcherooCore/KeychainStore.swift](../Sources/SwitcherooCore/KeychainStore.swift)
-  - Keychain read/write for auth snapshots.
-- [Sources/SwitcherooCore/CodexAuthFile.swift](../Sources/SwitcherooCore/CodexAuthFile.swift)
-  - Atomic read/write for the active auth file.
-- [Sources/SwitcherooMenuBar/main.swift](../Sources/SwitcherooMenuBar/main.swift)
-  - Status bar item + popover UI.
-
+- `Sources/SwitcherooCore/SwitcherooEngine.swift`
+  - Provider-agnostic orchestration (config + secure store + swapping active auth file).
+- `Sources/SwitcherooPresentation/SwitcherooApp.swift`
+  - Shared app state/actions (framework-free).
+- `Sources/SwitcherooCodexProvider/CodexProvider.swift`
+  - Codex provider implementation (auth file path + login prep).
+- `Sources/SwitcherooMacAdapters/MacConfigStore.swift`
+  - macOS config persistence (`~/Library/Application Support/Switcheroo/config.json`).
+- `Sources/SwitcherooMacAdapters/MacKeychainSecureStore.swift`
+  - macOS Keychain storage for auth snapshots.
+- `Sources/SwitcherooMacAdapters/CodexLoginRunner.swift`
+  - macOS login interaction (in-process TTY vs Terminal).
+- `Sources/SwitcherooDefaultApp/DefaultApp.swift`
+  - Concrete wiring used by both shells.

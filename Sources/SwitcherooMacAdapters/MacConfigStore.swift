@@ -1,6 +1,7 @@
 import Foundation
+import SwitcherooCore
 
-public final class ConfigStore: @unchecked Sendable {
+public final class MacConfigStore: @unchecked Sendable, SwitcherooConfigStoring {
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -16,10 +17,11 @@ public final class ConfigStore: @unchecked Sendable {
         self.decoder.dateDecodingStrategy = .iso8601
     }
 
-    public func configURL() throws -> URL {
+    private func configURL() throws -> URL {
         guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw SwitcherooError.configDirectoryUnavailable
+            throw SwitcherooError.configUnavailable
         }
+
         return appSupport
             .appendingPathComponent("Switcheroo", isDirectory: true)
             .appendingPathComponent("config.json", isDirectory: false)
@@ -53,3 +55,4 @@ public final class ConfigStore: @unchecked Sendable {
         }
     }
 }
+

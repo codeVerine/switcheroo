@@ -1,5 +1,5 @@
 import Foundation
-import SwitcherooCore
+import SwitcherooDefaultApp
 
 @main
 struct switcheroo {
@@ -22,75 +22,62 @@ struct switcheroo {
             return
         }
 
-        let service = try SwitcherooService()
+        let factory = SwitcherooDefaultAppFactory()
+        let app = try factory.make(loginStyle: .cliInteractive)
 
         switch cmd {
         case "list":
-            let accounts = service.listAccounts()
-            if accounts.isEmpty {
+            app.refresh()
+            let state = app.snapshot()
+            if state.accounts.isEmpty {
                 print("(no accounts)")
                 return
             }
-            for acc in accounts {
-                let activeMark = (service.activeAccount()?.id == acc.id) ? "*" : " "
-                print("\(activeMark) \(acc.name) (\(acc.id))")
+            for acc in state.accounts {
+                let activeMark = (state.activeAccountId == acc.id) ? "*" : " "
+                print("\(activeMark) \(acc.name)")
             }
 
         case "current":
-            if let active = service.activeAccount() {
-                print("\(active.name) (\(active.id))")
+            app.refresh()
+            let state = app.snapshot()
+            if let id = state.activeAccountId, let active = state.accounts.first(where: { $0.id == id }) {
+                print(active.name)
             } else {
                 print("(no active account)")
             }
 
         case "import-current":
             let name = try requireArg(args.dropFirst(), label: "name")
-            _ = try service.importCurrentAccount(name: name, setActive: false)
+            app.importCurrentAccount(name: name)
+            app.refresh()
             print("Imported '\(name)'.")
 
         case "add":
             let name = try requireArg(args.dropFirst(), label: "name")
             let setActive = args.contains("--set-active")
-
-            let pending = try service.prepareAddAccount(name: name)
-            try runCodexLoginInteractive(codexHomePath: pending.codexHomePath)
-            try service.finalizeAddAccount(pending, setActive: setActive)
+            app.startAddAccount(name: name)
+            app.finalizePendingIfReady(setActive: setActive)
+            app.refresh()
             print("Added '\(name)'.")
 
         case "switch":
-            let idOrName = try requireArg(args.dropFirst(), label: "account-id-or-name")
-            let targetId = resolveAccountId(service: service, idOrName: idOrName)
-            try service.switchToAccount(accountId: targetId)
+            let idOrName = try requireArg(args.dropFirst(), label: "account-name")
+            app.switchToAccount(idOrName: idOrName)
             print("Switched.")
 
         case "delete":
-            let idOrName = try requireArg(args.dropFirst(), label: "account-id-or-name")
-            let targetId = resolveAccountId(service: service, idOrName: idOrName)
-            try service.deleteAccount(accountId: targetId)
+            let idOrName = try requireArg(args.dropFirst(), label: "account-name")
+            app.deleteAccount(idOrName: idOrName)
             print("Deleted.")
 
         case "sync":
-            let did = try service.syncActiveAccountSnapshotIfNeeded()
-            print(did ? "Synced." : "No active account.")
+            app.syncActiveSnapshot()
+            print("Synced.")
 
         default:
             printUsage()
         }
-    }
-
-    private static func resolveAccountId(service: SwitcherooService, idOrName: String) -> String {
-        let accounts = service.listAccounts()
-        if let exact = accounts.first(where: { $0.id == idOrName }) {
-            return exact.id
-        }
-        if let byName = accounts.first(where: { $0.name == idOrName }) {
-            return byName.id
-        }
-        // fall back to prefix match on id
-        if let byPrefix = accounts.first(where: { $0.id.lowercased().hasPrefix(idOrName.lowercased()) }) {
-            return byPrefix.id
-        }
-        return idOrName
     }
 
     private static func requireArg<S: Sequence>(_ seq: S, label: String) throws -> String where S.Element == String {
@@ -98,27 +85,6 @@ struct switcheroo {
             return v
         }
         throw NSError(domain: "switcheroo.cli", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing argument: \(label)"])
-    }
-
-    private static func runCodexLoginInteractive(codexHomePath: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["codex", "login"]
-
-        var env = ProcessInfo.processInfo.environment
-        env["CODEX_HOME"] = codexHomePath
-        process.environment = env
-
-        process.standardInput = FileHandle.standardInput
-        process.standardOutput = FileHandle.standardOutput
-        process.standardError = FileHandle.standardError
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            throw SwitcherooError.codexLoginFailed(exitCode: process.terminationStatus, stderr: "")
-        }
     }
 
     private static func printUsage() {
@@ -131,10 +97,11 @@ struct switcheroo {
               switcheroo current
               switcheroo add <name> [--set-active]
               switcheroo import-current <name>
-              switcheroo switch <account-id-or-name>
-              switcheroo delete <account-id-or-name>
+              switcheroo switch <account-name>
+              switcheroo delete <account-name>
               switcheroo sync
             """
         )
     }
 }
+

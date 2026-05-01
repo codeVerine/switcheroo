@@ -1,37 +1,38 @@
 import Foundation
 import Security
+import SwitcherooCore
 
-public final class KeychainStore: @unchecked Sendable {
+public final class MacKeychainSecureStore: @unchecked Sendable, SwitcherooSecureStoring {
     private let service: String
 
     public init(service: String = "com.switcheroo.codex") {
         self.service = service
     }
 
-    public func storeAuthBlob(_ data: Data, accountId: String) throws {
+    public func store(_ data: Data, key: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: accountId,
+            kSecAttrAccount as String: key,
             kSecValueData as String: data,
         ]
 
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {
-            try updateAuthBlob(data, accountId: accountId)
+            try update(data, key: key)
             return
         }
 
         guard status == errSecSuccess else {
-            throw SwitcherooError.keychainError(status: status, message: keychainMessage(prefix: "Keychain write failed", status: status))
+            throw SwitcherooError.secureStoreFailure(message: keychainMessage(prefix: "Keychain write failed", status: status))
         }
     }
 
-    public func loadAuthBlob(accountId: String) throws -> Data {
+    public func load(key: String) throws -> Data {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: accountId,
+            kSecAttrAccount as String: key,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -39,41 +40,41 @@ public final class KeychainStore: @unchecked Sendable {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound {
-            throw SwitcherooError.keychainItemMissing
+            throw SwitcherooError.secureStoreItemMissing
         }
         guard status == errSecSuccess else {
-            throw SwitcherooError.keychainError(status: status, message: keychainMessage(prefix: "Keychain read failed", status: status))
+            throw SwitcherooError.secureStoreFailure(message: keychainMessage(prefix: "Keychain read failed", status: status))
         }
         guard let data = item as? Data else {
-            throw SwitcherooError.keychainItemMissing
+            throw SwitcherooError.secureStoreItemMissing
         }
         return data
     }
 
-    public func deleteAuthBlob(accountId: String) throws {
+    public func delete(key: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: accountId,
+            kSecAttrAccount as String: key,
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw SwitcherooError.keychainError(status: status, message: keychainMessage(prefix: "Keychain delete failed", status: status))
+            throw SwitcherooError.secureStoreFailure(message: keychainMessage(prefix: "Keychain delete failed", status: status))
         }
     }
 
-    private func updateAuthBlob(_ data: Data, accountId: String) throws {
+    private func update(_ data: Data, key: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: accountId,
+            kSecAttrAccount as String: key,
         ]
         let attrs: [String: Any] = [
             kSecValueData as String: data,
         ]
         let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
         guard status == errSecSuccess else {
-            throw SwitcherooError.keychainError(status: status, message: keychainMessage(prefix: "Keychain update failed", status: status))
+            throw SwitcherooError.secureStoreFailure(message: keychainMessage(prefix: "Keychain update failed", status: status))
         }
     }
 
@@ -82,3 +83,4 @@ public final class KeychainStore: @unchecked Sendable {
         return "\(prefix): \(status) (\(msg))"
     }
 }
+

@@ -10,6 +10,8 @@ let package = Package(
     ],
     products: [
         .library(name: "SwitcherooCore", targets: ["SwitcherooCore"]),
+        .library(name: "SwitcherooPresentation", targets: ["SwitcherooPresentation"]),
+        .library(name: "SwitcherooDefaultApp", targets: ["SwitcherooDefaultApp"]),
         .executable(name: "switcheroo", targets: ["switcheroo"]),
         .executable(name: "SwitcherooMenuBar", targets: ["SwitcherooMenuBar"]),
     ],
@@ -17,13 +19,29 @@ let package = Package(
         .target(
             name: "SwitcherooCore"
         ),
-        .executableTarget(
-            name: "switcheroo",
+        .target(
+            name: "SwitcherooPresentation",
+            dependencies: ["SwitcherooCore"]
+        ),
+        .target(
+            name: "SwitcherooDefaultApp",
+            dependencies: ["SwitcherooPresentation", "SwitcherooCodexProvider", "SwitcherooMacAdapters"]
+        ),
+        .target(
+            name: "SwitcherooCodexProvider",
+            dependencies: ["SwitcherooCore"]
+        ),
+        .target(
+            name: "SwitcherooMacAdapters",
             dependencies: ["SwitcherooCore"]
         ),
         .executableTarget(
+            name: "switcheroo",
+            dependencies: ["SwitcherooDefaultApp"]
+        ),
+        .executableTarget(
             name: "SwitcherooMenuBar",
-            dependencies: ["SwitcherooCore"]
+            dependencies: ["SwitcherooDefaultApp", "SwitcherooPresentation"]
         ),
     ]
 )

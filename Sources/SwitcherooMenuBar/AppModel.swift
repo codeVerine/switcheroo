@@ -1,111 +1,79 @@
 import Foundation
-import SwitcherooCore
+import SwitcherooDefaultApp
+import SwitcherooPresentation
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var errorMessage: String?
-    @Published var accounts: [SwitcherooAccount] = []
-    @Published var activeAccountId: String?
-    @Published var statusText: String = ""
-
+    @Published var state: SwitcherooAppState
     @Published var newAccountName: String = ""
-    @Published var pendingLogin: PendingLogin?
-    @Published var pendingHint: String?
 
-    private let service: SwitcherooService?
+    private let app: SwitcherooApp?
     private var pollTimer: Timer?
     private var syncTimer: Timer?
 
     init() {
         do {
-            self.service = try SwitcherooService()
+            let factory = SwitcherooDefaultAppFactory()
+            self.app = try factory.make(loginStyle: .openTerminal)
+            self.state = self.app?.snapshot() ?? SwitcherooAppState()
             refresh()
             startBackgroundSync()
         } catch {
-            self.service = nil
-            self.errorMessage = error.localizedDescription
+            self.app = nil
+            self.state = SwitcherooAppState(errorMessage: error.localizedDescription)
         }
     }
 
     func refresh() {
-        guard let service else { return }
-        accounts = service.listAccounts()
-        activeAccountId = service.activeAccount()?.id
-        statusText = activeAccountId.flatMap { id in accounts.first(where: { $0.id == id })?.name } ?? "No active account"
+        guard let app else { return }
+        app.refresh()
+        state = app.snapshot()
     }
 
     func startAddAccount() {
-        guard let service else { return }
         let name = newAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-
-        do {
-            let pending = try service.startAddAccount(name: name)
-            pendingLogin = pending
-            pendingHint = "Complete login in Terminal, then Switcheroo will import it."
-            newAccountName = ""
-            startPendingPoll()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        guard let app else { return }
+        app.startAddAccount(name: name)
+        newAccountName = ""
+        state = app.snapshot()
+        startPendingPoll()
     }
 
     func importCurrentAccount() {
-        guard let service else { return }
         let name = newAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        do {
-            _ = try service.importCurrentAccount(name: name, setActive: false)
-            newAccountName = ""
-            refresh()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        guard let app else { return }
+        app.importCurrentAccount(name: name)
+        newAccountName = ""
+        state = app.snapshot()
     }
 
-    func switchToAccount(_ account: SwitcherooAccount) {
-        guard let service else { return }
-        do {
-            try service.switchToAccount(accountId: account.id)
-            refresh()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    func switchToAccount(_ accountId: String) {
+        guard let app else { return }
+        app.switchToAccount(idOrName: accountId)
+        state = app.snapshot()
     }
 
-    func deleteAccount(_ account: SwitcherooAccount) {
-        guard let service else { return }
-        do {
-            try service.deleteAccount(accountId: account.id)
-            refresh()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+    func deleteAccount(_ accountId: String) {
+        guard let app else { return }
+        app.deleteAccount(idOrName: accountId)
+        state = app.snapshot()
     }
 
     func finalizePendingIfReady(setActive: Bool) {
-        guard let service else { return }
-        guard let pendingLogin else { return }
-        guard FileManager.default.fileExists(atPath: pendingLogin.expectedAuthJSONPath) else { return }
-
-        do {
-            try service.finalizeAddAccount(pendingLogin, setActive: setActive)
-            self.pendingLogin = nil
-            self.pendingHint = nil
+        guard let app else { return }
+        app.finalizePendingIfReady(setActive: setActive)
+        let next = app.snapshot()
+        state = next
+        if next.pendingLogin == nil {
             stopPendingPoll()
-            refresh()
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
     func syncActiveSnapshot() {
-        guard let service else { return }
-        do {
-            _ = try service.syncActiveAccountSnapshotIfNeeded()
-        } catch {
-            // Best-effort; show only if user is interacting.
-        }
+        guard let app else { return }
+        app.syncActiveSnapshot()
     }
 
     private func startPendingPoll() {
@@ -131,4 +99,3 @@ final class AppModel: ObservableObject {
         }
     }
 }
-

@@ -1,5 +1,4 @@
 import SwiftUI
-import SwitcherooCore
 
 struct StatusView: View {
     @ObservedObject var model: AppModel
@@ -9,14 +8,14 @@ struct StatusView: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            if let errorMessage = model.errorMessage {
+            if let errorMessage = model.state.errorMessage {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("Active: \(model.statusText)")
+            Text("Active: \(model.state.statusText)")
                 .font(.subheadline)
 
             accountList
@@ -25,7 +24,7 @@ struct StatusView: View {
 
             addSection
 
-            if let hint = model.pendingHint {
+            if let hint = model.state.pendingHint {
                 Text(hint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -55,24 +54,24 @@ struct StatusView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if model.accounts.isEmpty {
+            if model.state.accounts.isEmpty {
                 Text("No accounts added yet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(model.accounts) { acc in
+                ForEach(model.state.accounts) { acc in
                     HStack(spacing: 8) {
                         Text(acc.name)
                             .lineLimit(1)
                         Spacer()
-                        if model.activeAccountId == acc.id {
+                        if model.state.activeAccountId == acc.id {
                             Text("Active")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Button("Switch") { model.switchToAccount(acc) }
+                            Button("Switch") { model.switchToAccount(acc.id) }
                         }
-                        Button("Delete", role: .destructive) { model.deleteAccount(acc) }
+                        Button("Delete", role: .destructive) { model.deleteAccount(acc.id) }
                     }
                 }
             }
