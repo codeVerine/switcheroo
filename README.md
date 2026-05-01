@@ -1,41 +1,56 @@
 # Switcheroo
 
-Small macOS menu bar helper for **manual** Codex account failover when one account can't authenticate or the service is erroring (401/5xx/timeouts).
+Switcheroo is a small macOS menu bar app + CLI for **manual** Codex account failover.
 
-What it does:
-- Stores per-account Codex auth snapshots in Keychain.
-- Swaps the active `~/.codex/auth.json` atomically when you switch accounts.
-- Keeps the active account snapshot updated periodically (best-effort).
+Use case: you have multiple legit Codex accounts already authenticated locally, and you want a fast toggle when one account hits an auth/service outage (401/5xx/timeouts).
 
-What it does not do:
-- No automatic switching based on usage limits or quotas.
-- No browser/session tricks. Adding an account uses the official `codex login` flow.
+Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, or plan selection. It just swaps the active local `auth.json` used by the Codex app/CLI.
 
-Data locations:
+Not affiliated with OpenAI.
+
+## How It Works (In One Minute)
+
+1. Each account’s Codex `auth.json` is stored as an opaque blob in macOS Keychain.
+2. “Switch” replaces the active `~/.codex/auth.json` atomically with the chosen snapshot.
+3. A background “Sync” keeps the currently-active snapshot up to date (best-effort) by re-saving the current `auth.json` back into Keychain.
+
+Docs:
+- [Usage](/docs/USAGE.md)
+- [Data & Security](/docs/DATA-AND-SECURITY.md)
+- [Troubleshooting](/docs/TROUBLESHOOTING.md)
+- [Architecture](/docs/ARCHITECTURE.md)
+- [Development](/docs/DEVELOPMENT.md)
+
+## Requirements
+
+- macOS 13 (Ventura) or later
+- `codex` CLI installed and working in your shell
+
+## Install
+
+Right now this repo ships source-first.
+
+Build CLI:
+```bash
+swift build -c release --product switcheroo
+./.build/release/switcheroo list
+```
+
+Build the menu bar `.app` bundle:
+```bash
+./scripts/bundle_app.sh
+open dist/Switcheroo.app
+```
+
+Note: `dist/` is in `.gitignore` (it’s a local build artifact).
+
+## Data Locations
+
 - Config: `~/Library/Application Support/Switcheroo/config.json`
-- Keychain service: `com.switcheroo.codex` (one item per account id)
-- Unified logs: `log stream --predicate 'subsystem == "com.switcheroo"'`
+- Keychain service: `com.switcheroo.codex` (one generic password item per account id)
+- Codex active auth file (default): `~/.codex/auth.json` (Switcheroo swaps this)
+- Logs: `log stream --predicate 'subsystem == "com.switcheroo"' --style compact`
 
-## Build
+## License
 
-Note: On this machine, `swift` may not be able to write its default caches. These commands use `/private/tmp` caches and disable SwiftPM sandboxing.
-
-CLI:
-- `mkdir -p /private/tmp/switcheroo-swiftpm-cache /private/tmp/switcheroo-swiftpm-config /private/tmp/switcheroo-swiftpm-security /private/tmp/switcheroo-clang-module-cache`
-- `CLANG_MODULE_CACHE_PATH=/private/tmp/switcheroo-clang-module-cache swift build --disable-sandbox -c release --product switcheroo --cache-path /private/tmp/switcheroo-swiftpm-cache --config-path /private/tmp/switcheroo-swiftpm-config --security-path /private/tmp/switcheroo-swiftpm-security --manifest-cache local`
-
-Menu bar app (dev run):
-- `CLANG_MODULE_CACHE_PATH=/private/tmp/switcheroo-clang-module-cache swift run --disable-sandbox SwitcherooMenuBar --cache-path /private/tmp/switcheroo-swiftpm-cache --config-path /private/tmp/switcheroo-swiftpm-config --security-path /private/tmp/switcheroo-swiftpm-security --manifest-cache local`
-
-Open logs in Console:
-- `log stream --predicate 'subsystem == "com.switcheroo"' --style compact`
-
-Bundle a `.app`:
-- `./scripts/bundle_app.sh`
-
-## CLI usage
-
-- `./.build/release/switcheroo list`
-- `./.build/release/switcheroo add "Work" --set-active`
-- `./.build/release/switcheroo switch Work`
-- `./.build/release/switcheroo sync`
+MIT. See [LICENSE](/LICENSE).
