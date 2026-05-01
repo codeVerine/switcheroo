@@ -1,0 +1,21 @@
+.DS_Store
+
+# SwiftPM
+/.build/
+/.swiftpm/
+/Packages/
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# App bundles / releases
+/dist/
+
+# Editors
+.vscode/
+.idea/
+
+# Secrets
+.netrc
