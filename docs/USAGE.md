@@ -24,6 +24,10 @@ Controls:
 
 Important behavior: switching updates `~/.codex/auth.json` on disk, but running processes may need to be restarted to pick up the new auth.
 
+Background behavior:
+
+- The menu bar app runs a best-effort sync on a timer (currently every ~15 seconds) to keep the active account snapshot up to date.
+
 ## CLI
 
 Build:
@@ -62,4 +66,3 @@ It is not meant for:
 - Avoiding limits/quotas
 - Automatic switching
 - Running multiple active identities concurrently
-

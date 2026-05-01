@@ -20,6 +20,13 @@ Switcheroo treats `auth.json` as opaque. For reference only: as of May 1, 2026, 
 - `last_refresh`
 - `tokens`
 
+And `tokens` contained:
+
+- `access_token`
+- `refresh_token`
+- `id_token`
+- `account_id`
+
 Notably, it did not contain user identity fields like email or subscription plan name.
 
 Your file may differ depending on Codex version and authentication mode.
@@ -69,4 +76,3 @@ What it does instead:
 Practical takeaway:
 
 - If you want an account’s stored snapshot to stay fresh, make that account active occasionally and run a normal Codex command/app workflow, then let Switcheroo sync.
-
