@@ -235,6 +235,25 @@ public final class SwitcherooEngine: @unchecked Sendable {
         return result
     }
 
+    public func metadataByAccountId(providerId: String? = nil) throws -> [String: SwitcherooAccountMetadata] {
+        let pid = try resolveProviderId(providerId)
+        let provider = try requireProvider(pid)
+        let providerState = providerConfig(providerId: provider.id)
+
+        var result: [String: SwitcherooAccountMetadata] = [:]
+        for acc in providerState.accounts {
+            guard let data = try? secureStore.load(key: secureStoreKey(providerId: provider.id, accountId: acc.id)) else {
+                continue
+            }
+            guard let summary = CodexAuthParsing.summarize(authJSONData: data) else { continue }
+            result[acc.id] = SwitcherooAccountMetadata(
+                email: summary.email,
+                accessTokenExpiry: summary.accessTokenExpiry
+            )
+        }
+        return result
+    }
+
     public func switchToAccount(providerId: String? = nil, accountIdOrName: String) throws {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)

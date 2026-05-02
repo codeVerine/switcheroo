@@ -20,6 +20,7 @@ public struct SwitcherooAppState: Sendable {
     public var activeAccountId: String?
     public var statusText: String
     public var accessTokenExpiryByAccountId: [String: Date]
+    public var accountMetadataById: [String: SwitcherooAccountMetadata]
 
     public var pendingLogin: PendingLogin?
     public var pendingHint: String?
@@ -32,6 +33,7 @@ public struct SwitcherooAppState: Sendable {
         activeAccountId: String? = nil,
         statusText: String = "No active account",
         accessTokenExpiryByAccountId: [String: Date] = [:],
+        accountMetadataById: [String: SwitcherooAccountMetadata] = [:],
         pendingLogin: PendingLogin? = nil,
         pendingHint: String? = nil
     ) {
@@ -42,6 +44,7 @@ public struct SwitcherooAppState: Sendable {
         self.activeAccountId = activeAccountId
         self.statusText = statusText
         self.accessTokenExpiryByAccountId = accessTokenExpiryByAccountId
+        self.accountMetadataById = accountMetadataById
         self.pendingLogin = pendingLogin
         self.pendingHint = pendingHint
     }
@@ -65,7 +68,8 @@ public final class SwitcherooApp: @unchecked Sendable {
             let providerId = resolveSelectedProviderId()
             let accounts = try engine.listAccounts(providerId: providerId)
             let activeId = try engine.activeAccount(providerId: providerId)?.id
-            let expiryById = (try? engine.accessTokenExpiryByAccountId(providerId: providerId)) ?? [:]
+            let metadataById = (try? engine.metadataByAccountId(providerId: providerId)) ?? [:]
+            let expiryById = metadataById.compactMapValues(\.accessTokenExpiry)
 
             let statusText = activeId.flatMap { id in
                 accounts.first(where: { $0.id == id })?.name
@@ -77,6 +81,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.activeAccountId = activeId
             state.statusText = statusText
             state.accessTokenExpiryByAccountId = expiryById
+            state.accountMetadataById = metadataById
             lock.unlock()
         } catch {
             lock.lock()

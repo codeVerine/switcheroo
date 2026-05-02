@@ -14,6 +14,16 @@ public struct SwitcherooAccount: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public struct SwitcherooAccountMetadata: Hashable, Sendable {
+    public var email: String?
+    public var accessTokenExpiry: Date?
+
+    public init(email: String? = nil, accessTokenExpiry: Date? = nil) {
+        self.email = email
+        self.accessTokenExpiry = accessTokenExpiry
+    }
+}
+
 public struct SwitcherooProvider: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var activeAccountId: String?

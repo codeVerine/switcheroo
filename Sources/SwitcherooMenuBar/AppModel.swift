@@ -85,6 +85,12 @@ final class AppModel: ObservableObject {
         renameDraftPlaceholder = ""
     }
 
+    func startRenameDraft(accountId: String, currentName: String) {
+        renameDraftAccountId = accountId
+        renameDraftText = currentName
+        renameDraftPlaceholder = currentName
+    }
+
     func saveRenameDraft() {
         guard let app else { return }
         guard let accountId = renameDraftAccountId else { return }

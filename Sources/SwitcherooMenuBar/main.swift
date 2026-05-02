@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         if let button = statusItem.button {
             button.image = NSImage(
-                systemSymbolName: "arrow.triangle.2.circlepath",
+                systemSymbolName: "arrow.left.arrow.right",
                 accessibilityDescription: "Switcheroo"
             )
             button.action = #selector(togglePopover(_:))
@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         popover.delegate = self
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 380, height: 560)
+        popover.contentSize = popoverSize()
         popover.contentViewController = NSHostingController(
             rootView: StatusView(
                 model: model,
@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         NSApp.activate(ignoringOtherApps: true)
+        model.refresh()
+        popover.contentSize = popoverSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
@@ -58,6 +60,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private func popoverSize() -> NSSize {
+        let count = model.state.accounts.count
+        let height: CGFloat
+
+        if count == 0 {
+            height = 285
+        } else {
+            let visibleRows = min(count, 4)
+            height = 68 + CGFloat(visibleRows) * 55
+        }
+
+        return NSSize(width: 310, height: min(height, 380))
     }
 }
 
