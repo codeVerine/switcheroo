@@ -458,17 +458,46 @@ private struct IconButton: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
-            IconGlyph(icon, size: iconSize)
-                .frame(width: size, height: size)
-                .foregroundStyle(foreground)
-                .background(background)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        }
-        .buttonStyle(.borderless)
-        .help(tooltip)
-        .onHover { isHovering = $0 }
+        NativeIconButton(
+            systemName: systemName,
+            tooltip: tooltip,
+            symbolPointSize: iconSize,
+            foregroundColor: foreground,
+            backgroundColor: background,
+            isHovering: $isHovering,
+            action: action
+        )
+        .frame(width: size, height: size)
         .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    private var systemName: String {
+        switch icon {
+        case .switch:
+            return "arrow.left.arrow.right"
+        case .pencil:
+            return "pencil"
+        case .trash:
+            return "trash"
+        case .sync:
+            return "arrow.clockwise"
+        case .plus:
+            return "plus"
+        case .terminal:
+            return "terminal"
+        case .clock:
+            return "clock"
+        case .alert:
+            return "exclamationmark.triangle"
+        case .close:
+            return "xmark"
+        case .check:
+            return "checkmark"
+        case .empty:
+            return "plus.rectangle.on.folder"
+        case .power:
+            return "power"
+        }
     }
 
     private var iconSize: CGFloat {
