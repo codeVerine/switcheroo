@@ -24,16 +24,20 @@ typeset -A section_files
 for section in "${sections[@]}"; do
   section_files[$section]="$(mktemp)"
 done
+breaking_changes_file="$(mktemp)"
 
 while IFS=$'\t' read -r sha subject; do
+
   [[ -z "$sha" ]] && continue
   [[ "$subject" == Merge\ * ]] && continue
 
   commit_type="other"
+  has_breaking_change=0
   summary="$subject"
-  if [[ "$subject" =~ '^([a-z]+)(\([^)]+\))?:[[:space:]]*(.+)$' ]]; then
+  if [[ "$subject" =~ '^([a-z]+)(\([^)]+\))?(!)?:[[:space:]]*(.+)$' ]]; then
     commit_type="${match[1]}"
-    summary="${match[3]}"
+    summary="${match[4]}"
+    [[ -n "${match[3]}" ]] && has_breaking_change=1
   fi
 
   case "$commit_type" in
@@ -46,11 +50,25 @@ while IFS=$'\t' read -r sha subject; do
   esac
 
   printf -- '- %s (`%s`)\n' "$summary" "$sha" >> "${section_files[$section]}"
+
+  if [[ "$has_breaking_change" -eq 1 ]]; then
+    printf -- '- %s (`%s`)\n' "$summary" "$sha" >> "$breaking_changes_file"
+  fi
 done < <(git log --first-parent --reverse --format='%h%x09%s' "$range")
 
 {
   printf '# Switcheroo %s\n\n' "$version"
   printf 'Released on %s.\n\n' "$release_date"
+  printf '## Install\n\n'
+  printf -- '- Download `Switcheroo-%s-macos-arm64.dmg` for the app.\n' "$version"
+  printf -- '- Download `switcheroo-%s-macos-arm64.tar.gz` for the CLI binary.\n\n' "$version"
+
+  if [[ -s "$breaking_changes_file" ]]; then
+    printf '## Breaking Changes\n\n'
+    cat "$breaking_changes_file"
+    printf '\n'
+  fi
+
   printf "## What's Changed\n\n"
 
   for section in "${sections[@]}"; do
@@ -71,3 +89,4 @@ done < <(git log --first-parent --reverse --format='%h%x09%s' "$range")
 for file_path in "${(@v)section_files}"; do
   rm -f "$file_path"
 done
+rm -f "$breaking_changes_file"
