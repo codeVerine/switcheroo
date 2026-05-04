@@ -57,6 +57,13 @@ open dist/Switcheroo.app
 
 Note: `dist/` is in `.gitignore` (it’s a local build artifact).
 
+## GitHub Actions
+
+- `CI` runs on pushes to `main` and pull requests.
+- `Release` runs on `v*` tags and publishes:
+  - `switcheroo-<version>-macos-arm64.tar.gz`
+  - `Switcheroo-<version>-macos-arm64.dmg`
+
 ## Data Locations
 
 - Config: `~/Library/Application Support/Switcheroo/config.json`
