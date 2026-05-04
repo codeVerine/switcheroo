@@ -19,6 +19,9 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Swift
         uses: swift-actions/setup-swift@v2
@@ -34,6 +37,11 @@ jobs:
 
       - name: Build app bundle
         run: ./scripts/bundle_app.sh
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: ./scripts/generate_release_notes.sh "$GITHUB_REF_NAME" "$VERSION" dist/release-notes.md
 
       - name: Package release artifacts
         env:
@@ -58,7 +66,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Switcheroo ${{ steps.meta.outputs.version }}
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           files: |
             dist/switcheroo-${{ steps.meta.outputs.version }}-macos-arm64.tar.gz
             dist/Switcheroo-${{ steps.meta.outputs.version }}-macos-arm64.dmg

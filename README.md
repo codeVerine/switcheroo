@@ -63,6 +63,7 @@ Note: `dist/` is in `.gitignore` (it’s a local build artifact).
 - `Release` runs on `v*` tags and publishes:
   - `switcheroo-<version>-macos-arm64.tar.gz`
   - `Switcheroo-<version>-macos-arm64.dmg`
+- Release notes are generated automatically from git history at publish time.
 
 ## Data Locations
 
