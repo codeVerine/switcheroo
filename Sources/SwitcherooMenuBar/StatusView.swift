@@ -6,19 +6,24 @@ struct StatusView: View {
 
     var body: some View {
         let now = Date()
+        let viewModel = StatusViewModel(
+            state: model.state,
+            renameDraftAccountId: model.renameDraftAccountId,
+            now: now
+        )
 
         VStack(spacing: 0) {
-            header
+            header(viewModel)
             separator(horizontalInset: 10)
 
-            if model.state.accounts.isEmpty {
-                emptyState
+            if viewModel.isEmpty {
+                emptyState(viewModel)
             } else {
-                accountList(now: now)
+                accountList(viewModel)
             }
 
             separator(horizontalInset: 0)
-            footer
+            footer(viewModel)
         }
         .background(.ultraThinMaterial)
         .background(Theme.popoverBg)
@@ -28,10 +33,10 @@ struct StatusView: View {
                 .stroke(Theme.popoverBorder, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-        .frame(width: 310)
+        .frame(width: StatusViewModel.popoverWidth)
     }
 
-    private var header: some View {
+    private func header(_ viewModel: StatusViewModel) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: 7) {
                 ZStack {
@@ -48,7 +53,7 @@ struct StatusView: View {
                 }
                 .frame(width: 18, height: 18)
 
-                Text("Switcheroo")
+                Text(viewModel.title)
                     .font(.system(size: 13, weight: .bold))
                     .tracking(-0.26)
                     .foregroundStyle(Theme.textPrimary)
@@ -56,7 +61,7 @@ struct StatusView: View {
 
             Spacer()
 
-            if !model.state.accounts.isEmpty {
+            if viewModel.showHeaderActions {
                 HStack(spacing: 2) {
                     IconButton(
                         icon: .sync,
@@ -79,10 +84,10 @@ struct StatusView: View {
         .padding(.trailing, 12)
     }
 
-    private func accountList(now: Date) -> some View {
+    private func accountList(_ viewModel: StatusViewModel) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
-                if let errorMessage = model.state.errorMessage {
+                if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Theme.danger)
@@ -92,15 +97,9 @@ struct StatusView: View {
                         .padding(.vertical, 8)
                 }
 
-                ForEach(model.state.accounts) { account in
+                ForEach(viewModel.accounts) { account in
                     AccountRow(
-                        accountId: account.id,
-                        accountName: account.name,
-                        email: model.state.accountMetadataById[account.id]?.email,
-                        isActive: model.state.activeAccountId == account.id,
-                        expiry: model.state.accessTokenExpiryByAccountId[account.id],
-                        now: now,
-                        isRenaming: model.renameDraftAccountId == account.id,
+                        account: account,
                         renameText: $model.renameDraftText,
                         onSwitch: {
                             model.switchToAccount(account.id)
@@ -124,20 +123,20 @@ struct StatusView: View {
             .padding(.top, 4)
             .padding(.bottom, 8)
         }
-        .frame(maxHeight: accountListMaxHeight)
+        .frame(maxHeight: viewModel.accountListMaxHeight)
     }
 
-    private var emptyState: some View {
+    private func emptyState(_ viewModel: StatusViewModel) -> some View {
         VStack(spacing: 16) {
             IconGlyph(.empty, size: 36)
                 .foregroundStyle(Theme.textQuaternary)
 
             VStack(spacing: 4) {
-                Text("No accounts configured")
+                Text(viewModel.emptyState.title)
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(Theme.textSecondary)
 
-                Text("Sync an existing session or log in\nvia Terminal to get started.")
+                Text(viewModel.emptyState.message)
                     .font(.system(size: 11, weight: .regular))
                     .lineSpacing(2)
                     .multilineTextAlignment(.center)
@@ -145,11 +144,11 @@ struct StatusView: View {
             }
 
             VStack(spacing: 6) {
-                CtaButton(title: "Sync current account", icon: .sync, variant: .primary) {
+                CtaButton(title: viewModel.emptyState.primaryActionTitle, icon: .sync, variant: .primary) {
                     model.importCurrentAccount()
                 }
 
-                CtaButton(title: "Add new account", icon: .terminal, variant: .secondary) {
+                CtaButton(title: viewModel.emptyState.secondaryActionTitle, icon: .terminal, variant: .secondary) {
                     model.startAddAccount()
                 }
             }
@@ -161,16 +160,16 @@ struct StatusView: View {
         .padding(.bottom, 20)
     }
 
-    private var footer: some View {
+    private func footer(_ viewModel: StatusViewModel) -> some View {
         HStack(spacing: 0) {
-            Text(footerText)
+            Text(viewModel.footerText)
                 .font(.system(size: 10, weight: .medium))
                 .tracking(0.1)
                 .foregroundStyle(Theme.textQuaternary)
 
             Spacer()
 
-            Text("v1.0")
+            Text(viewModel.versionText)
                 .font(.system(size: 10, weight: .medium))
                 .tracking(0.1)
                 .foregroundStyle(Theme.textQuaternary)
@@ -193,33 +192,16 @@ struct StatusView: View {
         .padding(.leading, 12)
     }
 
-    private var footerText: String {
-        let count = model.state.accounts.count
-        if count == 0 { return "No active session" }
-        return count == 1 ? "1 account" : "\(count) accounts"
-    }
-
-    private var accountListMaxHeight: CGFloat {
-        CGFloat(min(model.state.accounts.count, 4)) * 55 + 12
-    }
-
     private func separator(horizontalInset: CGFloat) -> some View {
         Rectangle()
             .fill(Theme.separator)
             .frame(height: 1)
             .padding(.horizontal, horizontalInset)
     }
-
 }
 
-private struct AccountRow: View {
-    let accountId: String
-    let accountName: String
-    let email: String?
-    let isActive: Bool
-    let expiry: Date?
-    let now: Date
-    let isRenaming: Bool
+struct AccountRow: View {
+    let account: StatusViewModel.Account
     @Binding var renameText: String
     let onSwitch: () -> Void
     let onRename: () -> Void
@@ -233,7 +215,7 @@ private struct AccountRow: View {
         HStack(spacing: 10) {
             statusDot
 
-            if isRenaming {
+            if account.isRenaming {
                 HStack(spacing: 4) {
                     TextField("", text: $renameText)
                         .font(.system(size: 12, weight: .semibold))
@@ -247,8 +229,8 @@ private struct AccountRow: View {
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .stroke(Theme.accent, lineWidth: 1)
                         )
-                    .onSubmit(onSaveRename)
-                    .onExitCommand(perform: onCancelRename)
+                        .onSubmit(onSaveRename)
+                        .onExitCommand(perform: onCancelRename)
 
                     IconButton(
                         icon: .check,
@@ -267,7 +249,7 @@ private struct AccountRow: View {
             } else {
                 infoBlock
 
-                if isHovering || isActive {
+                if isHovering || account.isActive {
                     actions
                         .transition(.opacity)
                 }
@@ -278,32 +260,32 @@ private struct AccountRow: View {
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .animation(.easeOut(duration: 0.1), value: isHovering)
-        .animation(.easeOut(duration: 0.1), value: isActive)
+        .animation(.easeOut(duration: 0.1), value: account.isActive)
         .onHover { isHovering = $0 }
     }
 
     private var statusDot: some View {
         Circle()
-            .fill(isActive ? Theme.accent : .clear)
+            .fill(account.isActive ? Theme.accent : .clear)
             .overlay(
                 Circle()
-                    .stroke(isActive ? .clear : Theme.borderSecondary, lineWidth: 1.5)
+                    .stroke(account.isActive ? .clear : Theme.borderSecondary, lineWidth: 1.5)
             )
-            .shadow(color: isActive ? Theme.accentGlow : .clear, radius: 3)
+            .shadow(color: account.isActive ? Theme.accentGlow : .clear, radius: 3)
             .frame(width: 6, height: 6)
     }
 
     private var infoBlock: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
-                Text(accountName)
+                Text(account.name)
                     .font(.system(size: 12.5, weight: .semibold))
                     .tracking(-0.125)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
 
-                if isActive {
-                    Text("ACTIVE")
+                if let activeLabel = account.activeLabel {
+                    Text(activeLabel)
                         .font(.system(size: 9.5, weight: .semibold))
                         .tracking(0.475)
                         .foregroundStyle(Theme.accent)
@@ -311,7 +293,7 @@ private struct AccountRow: View {
             }
 
             HStack(spacing: 8) {
-                if let email, !email.isEmpty {
+                if let email = account.email, !email.isEmpty {
                     Text(email)
                         .font(.system(size: 10.5, weight: .regular))
                         .tracking(0.0525)
@@ -319,14 +301,14 @@ private struct AccountRow: View {
                         .lineLimit(1)
                 }
 
-                if let expiryDisplay {
+                if let expiry = account.expiry {
                     HStack(spacing: 3) {
-                        IconGlyph(expiryDisplay.isExpired ? .alert : .clock, size: 10)
-                        Text(expiryDisplay.text)
+                        IconGlyph(expiry.isExpired ? .alert : .clock, size: 10)
+                        Text(expiry.text)
                     }
                     .font(.system(size: 10.5, weight: .medium))
                     .tracking(0.105)
-                    .foregroundStyle(expiryDisplay.color)
+                    .foregroundStyle(expiryColor(for: expiry.kind))
                 }
             }
         }
@@ -335,7 +317,7 @@ private struct AccountRow: View {
 
     private var actions: some View {
         HStack(spacing: 2) {
-            if !isActive {
+            if account.showSwitchAction {
                 IconButton(
                     icon: .switch,
                     tooltip: "Switch to this account",
@@ -357,37 +339,24 @@ private struct AccountRow: View {
     }
 
     private var rowBackground: Color {
-        if isActive { return Theme.rowActiveBg }
+        if account.isActive { return Theme.rowActiveBg }
         if isHovering { return Theme.rowHover }
         return .clear
     }
 
-    private var expiryDisplay: ExpiryDisplay? {
-        guard let expiry else { return nil }
-
-        let remaining = expiry.timeIntervalSince(now)
-        if remaining <= 0 {
-            return ExpiryDisplay(text: "Expired", color: Theme.danger, isExpired: true)
+    private func expiryColor(for kind: StatusViewModel.ExpiryDisplay.Kind) -> Color {
+        switch kind {
+        case .expired:
+            return Theme.danger
+        case .warning:
+            return Theme.warning
+        case .neutral:
+            return Theme.textTertiary
         }
-
-        if remaining >= 3600 {
-            let hours = max(1, Int((remaining / 3600).rounded()))
-            return ExpiryDisplay(text: "\(hours)h left", color: Theme.textTertiary, isExpired: false)
-        }
-
-        let minutes = max(1, Int(ceil(remaining / 60)))
-        let color = remaining <= 600 ? Theme.warning : Theme.textTertiary
-        return ExpiryDisplay(text: "\(minutes)m left", color: color, isExpired: false)
     }
 }
 
-private struct ExpiryDisplay {
-    let text: String
-    let color: Color
-    let isExpired: Bool
-}
-
-private struct CtaButton: View {
+struct CtaButton: View {
     enum Variant {
         case primary
         case secondary
@@ -442,7 +411,7 @@ private struct CtaButton: View {
     }
 }
 
-private struct IconButton: View {
+struct IconButton: View {
     enum Variant {
         case `default`
         case danger
@@ -536,7 +505,7 @@ private struct IconButton: View {
     }
 }
 
-private enum IconKind {
+enum IconKind {
     case `switch`
     case pencil
     case trash

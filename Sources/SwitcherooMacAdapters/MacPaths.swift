@@ -2,17 +2,18 @@ import Foundation
 import SwitcherooCore
 
 public struct MacPaths: SwitcherooPaths {
-    private let fileManager: FileManager
+    private let fileManager: any MacFileManaging
 
     public init(fileManager: FileManager = .default) {
+        self.fileManager = LiveMacFileManager(fileManager: fileManager)
+    }
+
+    init(fileManager: any MacFileManaging) {
         self.fileManager = fileManager
     }
 
     public func loginHomeDirectory(providerId: String, accountId: String) throws -> String {
-        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw SwitcherooError.configUnavailable
-        }
-
+        let appSupport = try fileManager.applicationSupportDirectoryURL()
         return appSupport
             .appendingPathComponent("Switcheroo", isDirectory: true)
             .appendingPathComponent("login", isDirectory: true)
@@ -26,4 +27,3 @@ public struct MacPaths: SwitcherooPaths {
         try? fileManager.removeItem(atPath: expanded)
     }
 }
-

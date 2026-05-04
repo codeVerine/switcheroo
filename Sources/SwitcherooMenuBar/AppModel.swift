@@ -9,20 +9,33 @@ final class AppModel: ObservableObject {
     @Published var renameDraftText: String = ""
     @Published var renameDraftPlaceholder: String = ""
 
-    private let app: SwitcherooApp?
+    private let app: (any SwitcherooAppControlling)?
+    private let timersEnabled: Bool
     private var pollTimer: Timer?
     private var syncTimer: Timer?
 
     init() {
         do {
             let factory = SwitcherooDefaultAppFactory()
-            self.app = try factory.make(loginStyle: .openTerminal)
-            self.state = self.app?.snapshot() ?? SwitcherooAppState()
+            let app = try factory.make(loginStyle: .openTerminal)
+            self.app = app
+            self.state = app.snapshot()
+            self.timersEnabled = true
             refresh()
             startBackgroundSync()
         } catch {
             self.app = nil
+            self.timersEnabled = false
             self.state = SwitcherooAppState(errorMessage: error.localizedDescription)
+        }
+    }
+
+    init(app: any SwitcherooAppControlling, startTimers: Bool = false) {
+        self.app = app
+        self.timersEnabled = startTimers
+        self.state = app.snapshot()
+        if startTimers {
+            startBackgroundSync()
         }
     }
 
@@ -111,6 +124,7 @@ final class AppModel: ObservableObject {
     }
 
     private func startPendingPoll() {
+        guard timersEnabled else { return }
         stopPendingPoll()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -125,6 +139,7 @@ final class AppModel: ObservableObject {
     }
 
     private func startBackgroundSync() {
+        guard timersEnabled else { return }
         syncTimer?.invalidate()
         syncTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
             Task { @MainActor in

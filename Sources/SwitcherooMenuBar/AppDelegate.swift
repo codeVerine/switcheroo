@@ -10,7 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem = statusItem
@@ -26,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         popover.delegate = self
         popover.behavior = .transient
-        popover.contentSize = popoverSize()
+        popover.contentSize = Self.popoverSize(accountCount: model.state.accounts.count)
         popover.contentViewController = NSHostingController(
             rootView: StatusView(
                 model: model,
@@ -37,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         logger.info("Launched")
     }
 
-    @objc private func togglePopover(_ sender: Any?) {
+    @objc func togglePopover(_ sender: Any?) {
         guard let button = statusItem?.button else {
             logger.error("Missing status item button")
             return
@@ -48,9 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return
         }
 
-        NSApp.activate(ignoringOtherApps: true)
+        NSApplication.shared.activate(ignoringOtherApps: true)
         model.refresh()
-        popover.contentSize = popoverSize()
+        popover.contentSize = Self.popoverSize(accountCount: model.state.accounts.count)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
@@ -59,25 +60,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func quit() {
-        NSApp.terminate(nil)
+        NSApplication.shared.terminate(nil)
     }
 
-    private func popoverSize() -> NSSize {
-        let count = model.state.accounts.count
+    static func popoverSize(accountCount: Int) -> NSSize {
         let height: CGFloat
 
-        if count == 0 {
+        if accountCount == 0 {
             height = 285
         } else {
-            let visibleRows = min(count, 4)
+            let visibleRows = min(accountCount, 4)
             height = 68 + CGFloat(visibleRows) * 55
         }
 
         return NSSize(width: 310, height: min(height, 380))
     }
 }
-
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()

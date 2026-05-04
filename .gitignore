@@ -2,7 +2,10 @@
 
 # SwiftPM
 /.build/
+/.build-test/
 /.swiftpm/
+/.swift-cache/
+/.swift-home/
 /Packages/
 
 # Xcode

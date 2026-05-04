@@ -2,13 +2,22 @@ import Foundation
 import SwitcherooCore
 
 public final class MacConfigStore: @unchecked Sendable, SwitcherooConfigStoring {
-    private let fileManager: FileManager
+    private let fileManager: any MacFileManaging
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init(fileManager: FileManager = .default) {
-        self.fileManager = fileManager
+        self.fileManager = LiveMacFileManager(fileManager: fileManager)
+        self.encoder = JSONEncoder()
+        self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        self.encoder.dateEncodingStrategy = .iso8601
 
+        self.decoder = JSONDecoder()
+        self.decoder.dateDecodingStrategy = .iso8601
+    }
+
+    init(fileManager: any MacFileManaging) {
+        self.fileManager = fileManager
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.encoder.dateEncodingStrategy = .iso8601
@@ -18,10 +27,7 @@ public final class MacConfigStore: @unchecked Sendable, SwitcherooConfigStoring 
     }
 
     private func configURL() throws -> URL {
-        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw SwitcherooError.configUnavailable
-        }
-
+        let appSupport = try fileManager.applicationSupportDirectoryURL()
         return appSupport
             .appendingPathComponent("Switcheroo", isDirectory: true)
             .appendingPathComponent("config.json", isDirectory: false)
@@ -32,7 +38,7 @@ public final class MacConfigStore: @unchecked Sendable, SwitcherooConfigStoring 
         guard fileManager.fileExists(atPath: url.path) else {
             return SwitcherooConfig()
         }
-        let data = try Data(contentsOf: url)
+        let data = try fileManager.readData(contentsOf: url)
         return try decoder.decode(SwitcherooConfig.self, from: data)
     }
 
@@ -47,7 +53,7 @@ public final class MacConfigStore: @unchecked Sendable, SwitcherooConfigStoring 
     private func atomicWrite(data: Data, to url: URL) throws {
         let dir = url.deletingLastPathComponent()
         let tempURL = dir.appendingPathComponent(".config.json.switcheroo.tmp")
-        try data.write(to: tempURL, options: [.atomic])
+        try fileManager.write(data, to: tempURL)
         if fileManager.fileExists(atPath: url.path) {
             _ = try fileManager.replaceItemAt(url, withItemAt: tempURL, backupItemName: nil, options: [.usingNewMetadataOnly])
         } else {
@@ -55,4 +61,3 @@ public final class MacConfigStore: @unchecked Sendable, SwitcherooConfigStoring 
         }
     }
 }
-
