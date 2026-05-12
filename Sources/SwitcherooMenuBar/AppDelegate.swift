@@ -10,6 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // AppKit tooltips have a system-managed delay; make it feel snappier in our popover UI.
+        // `register(defaults:)` is non-persistent (does not write to disk).
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 200])
+
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
