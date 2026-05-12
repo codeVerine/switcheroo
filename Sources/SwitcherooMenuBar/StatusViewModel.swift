@@ -82,27 +82,45 @@ struct StatusViewModel: Equatable, Sendable {
 
         let text: String
         let kind: Kind
+        let remainingSeconds: Int
 
         var isExpired: Bool {
             kind == .expired
         }
 
         static func make(expiry: Date, now: Date) -> ExpiryDisplay {
-            let remaining = expiry.timeIntervalSince(now)
-            if remaining <= 0 {
-                return ExpiryDisplay(text: "Expired", kind: .expired)
+            let remainingInterval = expiry.timeIntervalSince(now)
+            let remainingSeconds = max(0, Int(remainingInterval))
+            if remainingInterval <= 0 {
+                return ExpiryDisplay(text: "Expired", kind: .expired, remainingSeconds: 0)
             }
 
-            if remaining >= 3600 {
-                let hours = max(1, Int((remaining / 3600).rounded()))
-                return ExpiryDisplay(text: "\(hours)h left", kind: .neutral)
+            if remainingInterval >= 3600 {
+                let hours = max(1, Int((remainingInterval / 3600).rounded()))
+                return ExpiryDisplay(text: "\(formatHours(hours)) left", kind: .neutral, remainingSeconds: remainingSeconds)
             }
 
-            let minutes = max(1, Int(ceil(remaining / 60)))
-            if remaining <= 600 {
-                return ExpiryDisplay(text: "\(minutes)m left", kind: .warning)
+            let minutes = max(1, Int(ceil(remainingInterval / 60)))
+            if remainingInterval <= 600 {
+                return ExpiryDisplay(text: "\(minutes)m left", kind: .warning, remainingSeconds: remainingSeconds)
             }
-            return ExpiryDisplay(text: "\(minutes)m left", kind: .neutral)
+            return ExpiryDisplay(text: "\(minutes)m left", kind: .neutral, remainingSeconds: remainingSeconds)
+        }
+
+        private static func formatHours(_ totalHours: Int) -> String {
+            let hoursPerDay = 24
+            let hoursPerWeek = hoursPerDay * 7
+
+            let weeks = totalHours / hoursPerWeek
+            let days = (totalHours % hoursPerWeek) / hoursPerDay
+            let hours = totalHours % hoursPerDay
+
+            var parts: [String] = []
+            if weeks > 0 { parts.append("\(weeks)w") }
+            if days > 0 { parts.append("\(days)d") }
+            if hours > 0 || parts.isEmpty { parts.append("\(hours)h") }
+
+            return parts.joined(separator: " ")
         }
     }
 }

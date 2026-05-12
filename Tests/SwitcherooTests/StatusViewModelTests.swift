@@ -115,17 +115,34 @@ final class StatusViewModelTests: XCTestCase {
         let expired = StatusViewModel.ExpiryDisplay.make(expiry: now.addingTimeInterval(-1), now: now)
         XCTAssertEqual(expired.text, "Expired")
         XCTAssertEqual(expired.kind, .expired)
+        XCTAssertEqual(expired.remainingSeconds, 0)
 
         let warning = StatusViewModel.ExpiryDisplay.make(expiry: now.addingTimeInterval(300), now: now)
         XCTAssertEqual(warning.text, "5m left")
         XCTAssertEqual(warning.kind, .warning)
+        XCTAssertEqual(warning.remainingSeconds, 300)
 
         let neutralMinutes = StatusViewModel.ExpiryDisplay.make(expiry: now.addingTimeInterval(901), now: now)
         XCTAssertEqual(neutralMinutes.text, "16m left")
         XCTAssertEqual(neutralMinutes.kind, .neutral)
+        XCTAssertEqual(neutralMinutes.remainingSeconds, 901)
 
         let hours = StatusViewModel.ExpiryDisplay.make(expiry: now.addingTimeInterval(7_200), now: now)
         XCTAssertEqual(hours.text, "2h left")
         XCTAssertEqual(hours.kind, .neutral)
+        XCTAssertEqual(hours.remainingSeconds, 7_200)
+
+        let daysAndHours = StatusViewModel.ExpiryDisplay.make(expiry: now.addingTimeInterval(27 * 3_600), now: now)
+        XCTAssertEqual(daysAndHours.text, "1d 3h left")
+        XCTAssertEqual(daysAndHours.kind, .neutral)
+        XCTAssertEqual(daysAndHours.remainingSeconds, 27 * 3_600)
+
+        let weeksDaysHours = StatusViewModel.ExpiryDisplay.make(
+            expiry: now.addingTimeInterval((9 * 24 * 3_600) + (5 * 3_600)),
+            now: now
+        )
+        XCTAssertEqual(weeksDaysHours.text, "1w 2d 5h left")
+        XCTAssertEqual(weeksDaysHours.kind, .neutral)
+        XCTAssertEqual(weeksDaysHours.remainingSeconds, (9 * 24 * 3_600) + (5 * 3_600))
     }
 }

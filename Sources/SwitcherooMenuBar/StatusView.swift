@@ -302,13 +302,15 @@ struct AccountRow: View {
                 }
 
                 if let expiry = account.expiry {
-                    HStack(spacing: 3) {
-                        IconGlyph(expiry.isExpired ? .alert : .clock, size: 10)
-                        Text(expiry.text)
+                    if expiry.isExpired {
+                        IconGlyph(.alert, size: 10)
+                            .foregroundStyle(expiryColor(for: expiry.kind))
+                            .help(expiryTooltip(for: expiry))
+                    } else if expiry.remainingSeconds < 24 * 3600 {
+                        IconGlyph(.clock, size: 10)
+                            .foregroundStyle(expiryColor(for: expiry.kind))
+                            .help(expiryTooltip(for: expiry))
                     }
-                    .font(.system(size: 10.5, weight: .medium))
-                    .tracking(0.105)
-                    .foregroundStyle(expiryColor(for: expiry.kind))
                 }
             }
         }
@@ -353,6 +355,18 @@ struct AccountRow: View {
         case .neutral:
             return Theme.textTertiary
         }
+    }
+
+    private func expiryTooltip(for expiry: StatusViewModel.ExpiryDisplay) -> String {
+        if expiry.isExpired {
+            return "Access token expired"
+        }
+
+        // `ExpiryDisplay.text` is already short (ex: "5m left", "1d 3h left").
+        // We want a clearer tooltip message without changing the underlying model contract.
+        let suffix = " left"
+        let remaining = expiry.text.hasSuffix(suffix) ? String(expiry.text.dropLast(suffix.count)) : expiry.text
+        return "Access token expires in \(remaining)"
     }
 }
 
