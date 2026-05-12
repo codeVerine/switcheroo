@@ -8,7 +8,9 @@ final class StatusViewModelTests: XCTestCase {
 
     func testEmptyStateDerivesStaticTextAndFlags() {
         let viewModel = StatusViewModel(
-            state: SwitcherooAppState(),
+            state: SwitcherooAppState(
+                providers: [ProviderDescriptor(id: "codex", displayName: "Codex")]
+            ),
             renameDraftAccountId: nil,
             now: now
         )
@@ -19,8 +21,8 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.showHeaderActions)
         XCTAssertTrue(viewModel.isEmpty)
         XCTAssertEqual(viewModel.emptyState.title, "No accounts configured")
-        XCTAssertEqual(viewModel.emptyState.message, "Sync an existing session or log in\nvia Terminal to get started.")
-        XCTAssertEqual(viewModel.emptyState.primaryActionTitle, "Sync current account")
+        XCTAssertEqual(viewModel.emptyState.message, "Import the account currently logged into Codex on this Mac.\nOr log in via Terminal to add a new account.")
+        XCTAssertEqual(viewModel.emptyState.primaryActionTitle, "Import logged-in account")
         XCTAssertEqual(viewModel.emptyState.secondaryActionTitle, "Add new account")
         XCTAssertEqual(viewModel.footerText, "No active session")
         XCTAssertEqual(viewModel.accountListMaxHeight, 12)

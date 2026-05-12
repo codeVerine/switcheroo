@@ -21,6 +21,7 @@ struct StatusViewModel: Equatable, Sendable {
         self.errorMessage = state.errorMessage
         self.showHeaderActions = !state.accounts.isEmpty
         self.isEmpty = state.accounts.isEmpty
+        let providerDisplayName = Self.providerDisplayName(state: state)
         self.accounts = state.accounts.map { account in
             let metadata = state.accountMetadataById[account.id]
             return Account(
@@ -40,8 +41,8 @@ struct StatusViewModel: Equatable, Sendable {
         self.accountListMaxHeight = Self.accountListMaxHeight(accountCount: state.accounts.count)
         self.emptyState = EmptyState(
             title: "No accounts configured",
-            message: "Sync an existing session or log in\nvia Terminal to get started.",
-            primaryActionTitle: "Sync current account",
+            message: "Import the account currently logged into \(providerDisplayName) on this Mac.\nOr log in via Terminal to add a new account.",
+            primaryActionTitle: "Import logged-in account",
             secondaryActionTitle: "Add new account"
         )
     }
@@ -53,6 +54,19 @@ struct StatusViewModel: Equatable, Sendable {
 
     private static func accountListMaxHeight(accountCount: Int) -> CGFloat {
         CGFloat(min(accountCount, 4)) * 55 + 12
+    }
+
+    private static func providerDisplayName(state: SwitcherooAppState) -> String {
+        if let selectedProviderId = state.selectedProviderId,
+           let selectedProvider = state.providers.first(where: { $0.id == selectedProviderId }) {
+            return selectedProvider.displayName
+        }
+
+        if state.providers.count == 1, let provider = state.providers.first {
+            return provider.displayName
+        }
+
+        return "the selected provider"
     }
 
     struct EmptyState: Equatable, Sendable {

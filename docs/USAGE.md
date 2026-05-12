@@ -14,13 +14,12 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 Controls:
 
 - Refresh: reloads config + active status from disk.
-- Add Account:
+- Import logged-in account: snapshots the currently logged in provider account from `~/.codex/auth.json` into Switcheroo as a new account.
+- Add account:
   - Login in Terminal: launches the official `codex login` flow in Terminal for a new account.
-  - Import Current: snapshots your currently-active `~/.codex/auth.json` into Switcheroo under the given name.
 - Accounts list:
   - Switch: makes that account’s snapshot the active `~/.codex/auth.json`.
   - Delete: removes the account entry and deletes the corresponding Keychain item.
-- Sync Now: snapshots the *current* active `~/.codex/auth.json` back into Keychain for the active account.
 
 Important behavior: switching updates `~/.codex/auth.json` on disk, but running processes may need to be restarted to pick up the new auth.
 

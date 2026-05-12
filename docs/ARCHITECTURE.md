@@ -36,7 +36,7 @@ Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs 
 1. Read the active `auth.json` from disk.
 2. Store it back into Keychain for the active account id.
 
-The menu bar app runs `sync` on a timer (best-effort) and exposes a “Sync Now” button.
+The menu bar app runs `sync` on a timer (best-effort). The visible menu bar action for creating a new account from the current logged-in session is “Import logged-in account”.
 
 ## Key Types / Files
 

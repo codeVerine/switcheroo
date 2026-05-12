@@ -81,6 +81,9 @@ final class StatusViewTests: XCTestCase {
         let defaultIconButton = IconButton(icon: .sync, tooltip: "Sync", action: {})
         _ = defaultIconButton.body
 
+        let importIconButton = IconButton(icon: .importCurrent, tooltip: "Import logged-in account", action: {})
+        _ = importIconButton.body
+
         let dangerIconButton = IconButton(icon: .trash, tooltip: "Delete", variant: .danger, action: {})
         _ = dangerIconButton.body
 

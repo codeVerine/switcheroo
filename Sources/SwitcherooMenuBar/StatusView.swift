@@ -64,8 +64,8 @@ struct StatusView: View {
             if viewModel.showHeaderActions {
                 HStack(spacing: 2) {
                     IconButton(
-                        icon: .sync,
-                        tooltip: "Sync current account"
+                        icon: .importCurrent,
+                        tooltip: viewModel.emptyState.primaryActionTitle
                     ) {
                         model.importCurrentAccount()
                     }
@@ -144,7 +144,7 @@ struct StatusView: View {
             }
 
             VStack(spacing: 6) {
-                CtaButton(title: viewModel.emptyState.primaryActionTitle, icon: .sync, variant: .primary) {
+                CtaButton(title: viewModel.emptyState.primaryActionTitle, icon: .importCurrent, variant: .primary) {
                     model.importCurrentAccount()
                 }
 
@@ -456,6 +456,8 @@ struct IconButton: View {
 
     private var systemName: String {
         switch icon {
+        case .importCurrent:
+            return "tray.and.arrow.down"
         case .switch:
             return "arrow.left.arrow.right"
         case .pencil:
@@ -485,7 +487,7 @@ struct IconButton: View {
 
     private var iconSize: CGFloat {
         switch icon {
-        case .sync, .terminal:
+        case .importCurrent, .sync, .terminal:
             return 14
         case .check, .power:
             return 11
@@ -520,6 +522,7 @@ struct IconButton: View {
 }
 
 enum IconKind {
+    case importCurrent
     case `switch`
     case pencil
     case trash
@@ -551,6 +554,8 @@ private struct IconGlyph: View {
 
     private var systemName: String {
         switch kind {
+        case .importCurrent:
+            return "tray.and.arrow.down"
         case .switch:
             return "arrow.left.arrow.right"
         case .pencil:

@@ -73,7 +73,8 @@ Switcheroo does not call any Codex/OpenAI APIs and does not implement token refr
 What it does instead:
 
 - While an account is active, Codex may update `~/.codex/auth.json` on its own (for example when it refreshes a token during normal use).
-- Switcheroo periodically snapshots the active `auth.json` back into Keychain (and also has a manual “Sync Now”).
+- Switcheroo periodically snapshots the active `auth.json` back into Keychain.
+- The menu bar also has an “Import logged-in account” action that creates a new stored account snapshot from the current auth file.
 
 Practical takeaway:
 
