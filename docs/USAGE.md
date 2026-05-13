@@ -25,7 +25,8 @@ Important behavior: switching updates `~/.codex/auth.json` on disk, but running 
 
 Background behavior:
 
-- The menu bar app runs a best-effort sync on a timer (currently every ~15 seconds) to keep the active account snapshot up to date.
+- Switcheroo attempts a best-effort sync from the active `~/.codex/auth.json` into the matching Keychain snapshot when the menu bar app launches, before a switch, and once per CLI command.
+- The menu bar app only polls every 15 seconds when the active access token has less than 2 days and 5 minutes left. If the active token expiry cannot be read or matched, the menu bar shows `Re-login required.`.
 
 ## CLI
 

@@ -51,6 +51,35 @@ final class SwitcherooCoreTests: XCTestCase {
         XCTAssertNil(CodexAuthParsing.summarize(authJSONData: Data("not-json".utf8)))
     }
 
+    func testAutoSyncPolicyPollsInsideRefreshWindow() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let expiry = now.addingTimeInterval(SwitcherooAutoSyncPolicy.refreshWindow)
+
+        XCTAssertEqual(
+            SwitcherooAutoSyncPolicy.decision(accessTokenExpiry: expiry, now: now),
+            .poll(interval: SwitcherooAutoSyncPolicy.pollingInterval)
+        )
+    }
+
+    func testAutoSyncPolicyRechecksAtRefreshWindowBoundary() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let expiry = now.addingTimeInterval(SwitcherooAutoSyncPolicy.refreshWindow + 60)
+
+        XCTAssertEqual(
+            SwitcherooAutoSyncPolicy.decision(accessTokenExpiry: expiry, now: now),
+            .recheck(after: 60)
+        )
+    }
+
+    func testAutoSyncPolicyDisablesWhenExpiryIsUnknown() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertEqual(
+            SwitcherooAutoSyncPolicy.decision(accessTokenExpiry: nil, now: now),
+            .disabled(requiresRelogin: true)
+        )
+    }
+
     func testCodexProviderPreparesLoginAndLaunchesRunner() throws {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

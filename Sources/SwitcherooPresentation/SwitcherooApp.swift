@@ -21,6 +21,7 @@ public struct SwitcherooAppState: Sendable {
     public var statusText: String
     public var accessTokenExpiryByAccountId: [String: Date]
     public var accountMetadataById: [String: SwitcherooAccountMetadata]
+    public var requiresRelogin: Bool
 
     public var pendingLogin: PendingLogin?
     public var pendingHint: String?
@@ -34,6 +35,7 @@ public struct SwitcherooAppState: Sendable {
         statusText: String = "No active account",
         accessTokenExpiryByAccountId: [String: Date] = [:],
         accountMetadataById: [String: SwitcherooAccountMetadata] = [:],
+        requiresRelogin: Bool = false,
         pendingLogin: PendingLogin? = nil,
         pendingHint: String? = nil
     ) {
@@ -45,6 +47,7 @@ public struct SwitcherooAppState: Sendable {
         self.statusText = statusText
         self.accessTokenExpiryByAccountId = accessTokenExpiryByAccountId
         self.accountMetadataById = accountMetadataById
+        self.requiresRelogin = requiresRelogin
         self.pendingLogin = pendingLogin
         self.pendingHint = pendingHint
     }
@@ -208,8 +211,10 @@ public final class SwitcherooApp: @unchecked Sendable {
     public func switchToAccount(idOrName: String) {
         do {
             let providerId = resolveSelectedProviderId()
+            _ = try? engine.syncActiveAccountSnapshot(providerId: providerId)
             try engine.switchToAccount(providerId: providerId, accountIdOrName: idOrName)
             refresh()
+            setReloginRequired(false)
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
@@ -229,12 +234,51 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
-    public func syncActiveSnapshot() {
+    @discardableResult
+    public func syncActiveSnapshot() -> SwitcherooActiveSnapshotSyncResult? {
         do {
             let providerId = resolveSelectedProviderId()
-            _ = try engine.syncActiveAccountSnapshotIfNeeded(providerId: providerId)
+            let result = try engine.syncActiveAccountSnapshot(providerId: providerId)
+            refresh()
+            setReloginRequired(result.requiresRelogin && shouldWarnAboutRelogin())
+            return result
         } catch {
-            // Best-effort; ignore.
+            setReloginRequired(shouldWarnAboutRelogin())
+            return nil
+        }
+    }
+
+    public func autoSyncDecision(now: Date) -> SwitcherooAutoSyncDecision {
+        guard shouldWarnAboutRelogin() else {
+            setReloginRequired(false)
+            return .disabled(requiresRelogin: false)
+        }
+
+        do {
+            let providerId = resolveSelectedProviderId()
+            let accounts = try engine.listAccounts(providerId: providerId)
+            let authInfo = try engine.activeAuthInfo(providerId: providerId)
+
+            // Avoid Keychain reads here. If we can’t confidently match the active auth identity to an existing
+            // configured account identity, don’t poll aggressively in the background.
+            if accounts.allSatisfy({ $0.identityKey != nil }) {
+                guard let identityKey = authInfo.identityKey else {
+                    setReloginRequired(true)
+                    return .disabled(requiresRelogin: true)
+                }
+                if !accounts.contains(where: { $0.identityKey == identityKey }) {
+                    setReloginRequired(true)
+                    return .disabled(requiresRelogin: true)
+                }
+            }
+
+            let decision = SwitcherooAutoSyncPolicy.decision(accessTokenExpiry: authInfo.accessTokenExpiry, now: now)
+            setReloginRequired(decision.requiresRelogin)
+            return decision
+        } catch {
+            let requiresRelogin = shouldWarnAboutRelogin()
+            setReloginRequired(requiresRelogin)
+            return .disabled(requiresRelogin: requiresRelogin)
         }
     }
 
@@ -267,6 +311,19 @@ public final class SwitcherooApp: @unchecked Sendable {
         let snap = state
         lock.unlock()
         return body(snap)
+    }
+
+    private func shouldWarnAboutRelogin() -> Bool {
+        withState { state in
+            guard let activeAccountId = state.activeAccountId else { return false }
+            return state.accounts.contains(where: { $0.id == activeAccountId })
+        }
+    }
+
+    private func setReloginRequired(_ required: Bool) {
+        lock.lock()
+        state.requiresRelogin = required
+        lock.unlock()
     }
 
     private func errorMessage(from error: Error) -> String {

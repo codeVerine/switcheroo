@@ -73,9 +73,10 @@ Switcheroo does not call any Codex/OpenAI APIs and does not implement token refr
 What it does instead:
 
 - While an account is active, Codex may update `~/.codex/auth.json` on its own (for example when it refreshes a token during normal use).
-- Switcheroo periodically snapshots the active `auth.json` back into Keychain when it can match the file to an existing Switcheroo account.
+- Switcheroo snapshots the active `auth.json` back into Keychain when it starts, before switching accounts, and during its background sync window, but only when it can match the file to an existing Switcheroo account.
+- The menu bar app only runs 15-second background sync polling when the active access token has less than 2 days and 5 minutes left. Outside that window it schedules a later recheck instead of continuously reading credentials.
 - The menu bar also has an “Import logged-in account” action that creates a new stored account snapshot from the current auth file, or refreshes an existing matching account instead of creating a duplicate.
 
 Practical takeaway:
 
-- If you want an account’s stored snapshot to stay fresh, make that account active occasionally and run a normal Codex command/app workflow, then let Switcheroo sync. If the current auth file is for an account that has not been added, use the explicit import action.
+- If you want an account’s stored snapshot to stay fresh, make that account active occasionally and run a normal Codex command/app workflow, then let Switcheroo capture the updated file. If the current auth file is for an account that has not been added, use the explicit import action.

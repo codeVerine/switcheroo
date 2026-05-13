@@ -48,6 +48,14 @@ public struct SwitcherooCLI {
         }
 
         let args = Array(arguments.dropFirst())
+        // Best-effort: try to keep the active snapshot fresh, but only once per command.
+        // (The explicit `sync` command handles its own sync.)
+        if command != "sync" {
+            _ = app.syncActiveSnapshot()
+            if app.snapshot().requiresRelogin {
+                errorOutput("switcheroo: Re-login required.")
+            }
+        }
 
         switch command {
         case "list":
@@ -97,7 +105,10 @@ public struct SwitcherooCLI {
             output("Deleted.")
 
         case "sync":
-            app.syncActiveSnapshot()
+            _ = app.syncActiveSnapshot()
+            if app.snapshot().requiresRelogin {
+                errorOutput("switcheroo: Re-login required.")
+            }
             output("Synced.")
 
         default:

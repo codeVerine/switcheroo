@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     private var pollTimer: Timer?
     private var syncTimer: Timer?
     private var statusMessageDismissTask: Task<Void, Never>?
+    private static let reloginRecheckInterval: TimeInterval = 60
 
     init() {
         do {
@@ -26,8 +27,9 @@ final class AppModel: ObservableObject {
             self.state = app.snapshot()
             self.timersEnabled = true
             self.statusMessageAutoDismissNanoseconds = 3_000_000_000
+            _ = app.syncActiveSnapshot()
             refresh()
-            startBackgroundSync()
+            scheduleAutoSync()
         } catch {
             self.app = nil
             self.timersEnabled = false
@@ -46,7 +48,7 @@ final class AppModel: ObservableObject {
         self.statusMessageAutoDismissNanoseconds = statusMessageAutoDismissNanoseconds
         self.state = app.snapshot()
         if startTimers {
-            startBackgroundSync()
+            scheduleAutoSync()
         }
     }
 
@@ -80,6 +82,7 @@ final class AppModel: ObservableObject {
             clearStatusMessage()
         }
         state = app.snapshot()
+        scheduleAutoSync()
     }
 
     func switchToAccount(_ accountId: String) {
@@ -87,6 +90,7 @@ final class AppModel: ObservableObject {
         clearStatusMessage()
         app.switchToAccount(idOrName: accountId)
         state = app.snapshot()
+        scheduleAutoSync()
     }
 
     func deleteAccount(_ accountId: String) {
@@ -110,6 +114,7 @@ final class AppModel: ObservableObject {
         }
         let next = app.snapshot()
         state = next
+        scheduleAutoSync()
         if next.pendingLogin == nil {
             stopPendingPoll()
         }
@@ -117,7 +122,8 @@ final class AppModel: ObservableObject {
 
     func syncActiveSnapshot() {
         guard let app else { return }
-        app.syncActiveSnapshot()
+        _ = app.syncActiveSnapshot()
+        state = app.snapshot()
     }
 
     func cancelRenameDraft() {
@@ -207,12 +213,39 @@ final class AppModel: ObservableObject {
         pollTimer = nil
     }
 
-    private func startBackgroundSync() {
+    private func scheduleAutoSync() {
         guard timersEnabled else { return }
         syncTimer?.invalidate()
-        syncTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.syncActiveSnapshot()
+        guard let app else { return }
+
+        let decision = app.autoSyncDecision(now: Date())
+        state = app.snapshot()
+
+        switch decision {
+        case .poll(let interval):
+            syncTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    self?.syncActiveSnapshot()
+                    self?.scheduleAutoSync()
+                }
+            }
+        case .recheck(let interval):
+            syncTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    self?.scheduleAutoSync()
+                }
+            }
+        case .disabled(let requiresRelogin):
+            if requiresRelogin {
+                // Keep a low-frequency recheck running so a user login can clear the banner without
+                // requiring an explicit UI action, but avoid tight polling in a broken state.
+                syncTimer = Timer.scheduledTimer(withTimeInterval: Self.reloginRecheckInterval, repeats: false) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.scheduleAutoSync()
+                    }
+                }
+            } else {
+                syncTimer = nil
             }
         }
     }

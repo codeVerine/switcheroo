@@ -32,6 +32,75 @@ public struct SwitcherooAccountWriteResult: Hashable, Sendable {
     }
 }
 
+public enum SwitcherooActiveSnapshotSyncDisposition: Hashable, Sendable {
+    case updatedExisting
+    case skippedNoIdentity
+    case skippedUnmatchedIdentity
+}
+
+public struct SwitcherooActiveSnapshotSyncResult: Hashable, Sendable {
+    public let disposition: SwitcherooActiveSnapshotSyncDisposition
+    public let account: SwitcherooAccount?
+    public let accessTokenExpiry: Date?
+
+    public init(
+        disposition: SwitcherooActiveSnapshotSyncDisposition,
+        account: SwitcherooAccount?,
+        accessTokenExpiry: Date?
+    ) {
+        self.disposition = disposition
+        self.account = account
+        self.accessTokenExpiry = accessTokenExpiry
+    }
+
+    public var requiresRelogin: Bool {
+        disposition != .updatedExisting
+    }
+}
+
+public enum SwitcherooAutoSyncDecision: Hashable, Sendable {
+    case poll(interval: TimeInterval)
+    case recheck(after: TimeInterval)
+    case disabled(requiresRelogin: Bool)
+
+    public var requiresRelogin: Bool {
+        switch self {
+        case .poll, .recheck:
+            return false
+        case .disabled(let requiresRelogin):
+            return requiresRelogin
+        }
+    }
+}
+
+public enum SwitcherooAutoSyncPolicy {
+    public static let refreshWindow: TimeInterval = 2 * 24 * 60 * 60 + 5 * 60
+    public static let pollingInterval: TimeInterval = 15
+
+    public static func decision(accessTokenExpiry: Date?, now: Date) -> SwitcherooAutoSyncDecision {
+        guard let accessTokenExpiry else {
+            return .disabled(requiresRelogin: true)
+        }
+
+        let secondsUntilWindow = accessTokenExpiry.timeIntervalSince(now) - refreshWindow
+        if secondsUntilWindow <= 0 {
+            return .poll(interval: pollingInterval)
+        }
+
+        return .recheck(after: secondsUntilWindow)
+    }
+}
+
+public struct SwitcherooActiveAuthInfo: Sendable {
+    public let identityKey: String?
+    public let accessTokenExpiry: Date?
+
+    public init(identityKey: String?, accessTokenExpiry: Date?) {
+        self.identityKey = identityKey
+        self.accessTokenExpiry = accessTokenExpiry
+    }
+}
+
 public struct SwitcherooAccountMetadata: Hashable, Sendable {
     public var email: String?
     public var accessTokenExpiry: Date?

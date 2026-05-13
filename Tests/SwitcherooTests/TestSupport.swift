@@ -134,6 +134,7 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     private(set) var switchCalls: [String] = []
     private(set) var deleteCalls: [String] = []
     private(set) var syncCalls = 0
+    private(set) var autoSyncDecisionCalls: [Date] = []
     private(set) var renameCalls: [(accountId: String, newName: String)] = []
 
     var nextPendingLogin: PendingLogin?
@@ -144,6 +145,12 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     var nextSnapshot: SwitcherooAppState?
     var forceDerivedImportToReturnNil = false
     var forceDerivedFinalizeToReturnNil = false
+    var nextSyncResult = SwitcherooActiveSnapshotSyncResult(
+        disposition: .updatedExisting,
+        account: nil,
+        accessTokenExpiry: nil
+    )
+    var nextAutoSyncDecision: SwitcherooAutoSyncDecision = .disabled(requiresRelogin: false)
 
     init(state: SwitcherooAppState = SwitcherooAppState()) {
         self.state = state
@@ -193,7 +200,7 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
             state.accounts.append(account)
         }
         state.errorMessage = nil
-        if setActiveIfFirst && state.accounts.count == 1 {
+        if setActiveIfFirst && !hasActiveAccount {
             state.activeAccountId = account.id
         }
         return SwitcherooAccountWriteResult(disposition: nextImportedDisposition, account: account)
@@ -226,7 +233,7 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
         }
         state.pendingLogin = nil
         state.pendingHint = nil
-        if setActiveIfFirst && state.accounts.count == 1 {
+        if setActiveIfFirst && !hasActiveAccount {
             state.activeAccountId = account.id
         }
         return SwitcherooAccountWriteResult(disposition: nextFinalizedDisposition, account: account)
@@ -258,8 +265,16 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
         }
     }
 
-    func syncActiveSnapshot() {
+    func syncActiveSnapshot() -> SwitcherooActiveSnapshotSyncResult? {
         syncCalls += 1
+        state.requiresRelogin = nextSyncResult.requiresRelogin
+        return nextSyncResult
+    }
+
+    func autoSyncDecision(now: Date) -> SwitcherooAutoSyncDecision {
+        autoSyncDecisionCalls.append(now)
+        state.requiresRelogin = nextAutoSyncDecision.requiresRelogin
+        return nextAutoSyncDecision
     }
 
     func renameAccount(accountId: String, newName: String) {
@@ -283,6 +298,11 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
         )
         state.pendingLogin = pending
         state.pendingHint = "Complete login, then Switcheroo will import it."
+    }
+
+    private var hasActiveAccount: Bool {
+        guard let activeAccountId = state.activeAccountId else { return false }
+        return state.accounts.contains(where: { $0.id == activeAccountId })
     }
 }
 

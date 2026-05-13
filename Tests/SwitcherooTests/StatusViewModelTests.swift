@@ -16,7 +16,8 @@ final class StatusViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(viewModel.title, "Switcheroo")
-        XCTAssertEqual(viewModel.versionText, "v1.0")
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        XCTAssertEqual(viewModel.versionText, "v\(version ?? "0.0.0")")
         XCTAssertNil(viewModel.errorMessage)
         XCTAssertNil(viewModel.statusMessage)
         XCTAssertFalse(viewModel.showHeaderActions)
@@ -126,6 +127,19 @@ final class StatusViewModelTests: XCTestCase {
 
         XCTAssertNil(viewModel.errorMessage)
         XCTAssertEqual(viewModel.statusMessage, "Refreshed Primary.")
+    }
+
+    func testReloginWarningUsesCompactErrorBannerAndHidesStatus() {
+        let account = makeAccount(id: "acc-1", name: "Primary")
+        let viewModel = StatusViewModel(
+            state: SwitcherooAppState(accounts: [account], requiresRelogin: true),
+            renameDraftAccountId: nil,
+            statusMessage: "Refreshed Primary.",
+            now: now
+        )
+
+        XCTAssertEqual(viewModel.errorMessage, "Re-login required.")
+        XCTAssertNil(viewModel.statusMessage)
     }
 
     func testExpiryDisplayClassifiesRemainingTime() {

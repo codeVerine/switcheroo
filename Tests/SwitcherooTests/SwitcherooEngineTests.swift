@@ -142,7 +142,7 @@ final class SwitcherooEngineTests: XCTestCase {
         let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
         let provider = try XCTUnwrap(savedConfig.providers.first)
         XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([existing.id, imported.id]))
-        XCTAssertNil(provider.activeAccountId)
+        XCTAssertEqual(provider.activeAccountId, imported.id)
         XCTAssertEqual(harness.secureStore.items["codex:\(existing.id)"], oldData)
         XCTAssertEqual(harness.secureStore.items["codex:\(imported.id)"], newData)
     }
@@ -300,7 +300,7 @@ final class SwitcherooEngineTests: XCTestCase {
         let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
         let provider = try XCTUnwrap(savedConfig.providers.first)
         XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([existing.id, newAccount.id]))
-        XCTAssertNil(provider.activeAccountId)
+        XCTAssertEqual(provider.activeAccountId, newAccount.id)
         XCTAssertEqual(provider.accounts.first(where: { $0.id == newAccount.id })?.identityKey, "account_id:acct-new|email:same@example.com")
         XCTAssertEqual(harness.secureStore.items["codex:\(newAccount.id)"], newAuth)
     }
@@ -520,6 +520,40 @@ final class SwitcherooEngineTests: XCTestCase {
         XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
         XCTAssertEqual(harness.secureStore.items["codex:\(first.id)"], firstAuth)
         XCTAssertNotEqual(harness.secureStore.items["codex:\(second.id)"], secondAuth)
+    }
+
+    func testSyncActiveSnapshotUpdatesMatchedAccountEvenWhenActiveIdIsStale() throws {
+        let activePath = "/tmp/active/auth.json"
+        let first = makeAccount(id: "acc-first", name: "First", identityKey: "account_id:acct-first|email:first@example.com")
+        let second = makeAccount(id: "acc-second", name: "Second", identityKey: "account_id:acct-second|email:second@example.com")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: first.id,
+                    accounts: [first, second],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let firstAuth = try makeAuthData(email: "first@example.com", accountId: "acct-first")
+        let oldSecondAuth = try makeAuthData(email: "second@example.com", accountId: "acct-second", accessTokenExpiry: Date(timeIntervalSince1970: 1_700_000_000))
+        let refreshedSecondAuth = try makeAuthData(email: "second@example.com", accountId: "acct-second", accessTokenExpiry: Date(timeIntervalSince1970: 1_700_010_000))
+        harness.secureStore.items["codex:\(first.id)"] = firstAuth
+        harness.secureStore.items["codex:\(second.id)"] = oldSecondAuth
+        harness.fileIO.files[activePath] = refreshedSecondAuth
+
+        let result = try harness.engine.syncActiveAccountSnapshot()
+
+        XCTAssertEqual(result.disposition, .updatedExisting)
+        XCTAssertEqual(result.account?.id, second.id)
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(provider.activeAccountId, second.id)
+        XCTAssertEqual(harness.secureStore.items["codex:\(first.id)"], firstAuth)
+        XCTAssertEqual(harness.secureStore.items["codex:\(second.id)"], refreshedSecondAuth)
     }
 
     func testSyncActiveSnapshotSkipsUnknownCurrentAuthIdentity() throws {

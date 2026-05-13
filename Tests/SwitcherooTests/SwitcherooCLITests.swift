@@ -116,7 +116,7 @@ final class SwitcherooCLITests: XCTestCase {
         XCTAssertEqual(app.importCurrentAccountNameCalls, ["Personal"])
         XCTAssertEqual(app.startAddAccountNameCalls, ["Work"])
         XCTAssertEqual(app.finalizeSetActiveCalls, [true])
-        XCTAssertEqual(app.syncCalls, 1)
+        XCTAssertEqual(app.syncCalls, 3)
         XCTAssertEqual(output, [
             "Imported 'Personal'.",
             "Added 'Work'.",
@@ -150,6 +150,28 @@ final class SwitcherooCLITests: XCTestCase {
             "Updated existing account 'Existing'.",
             "Updated existing account 'Existing'.",
         ])
+    }
+
+    func testCommandPrintsShortReloginWarningWhenOpportunisticSyncCannotMatchAccount() {
+        let app = MockSwitcherooApp()
+        app.nextSyncResult = SwitcherooActiveSnapshotSyncResult(
+            disposition: .skippedUnmatchedIdentity,
+            account: nil,
+            accessTokenExpiry: nil
+        )
+        var output: [String] = []
+        var errors: [String] = []
+        let cli = SwitcherooCLI(
+            app: app,
+            output: { output.append($0) },
+            errorOutput: { errors.append($0) }
+        )
+
+        XCTAssertEqual(cli.run(arguments: ["list"]), 0)
+
+        XCTAssertEqual(app.syncCalls, 1)
+        XCTAssertEqual(output, ["(no accounts)"])
+        XCTAssertEqual(errors, ["switcheroo: Re-login required."])
     }
 
     func testSwitchDeleteAndMissingArgumentErrors() {

@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -z "${VERSION:-}" ]]; then
+  TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+  VERSION="${TAG#v}"
+fi
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="0.0.0-dev"
+fi
+
 mkdir -p /private/tmp/switcheroo-swiftpm-cache /private/tmp/switcheroo-swiftpm-config /private/tmp/switcheroo-swiftpm-security /private/tmp/switcheroo-clang-module-cache
 export CLANG_MODULE_CACHE_PATH="/private/tmp/switcheroo-clang-module-cache"
 swift build --disable-sandbox -c release --product SwitcherooMenuBar \
@@ -22,7 +30,7 @@ mkdir -p "$APP_DIR/Contents/Resources"
 cp "$BIN" "$APP_DIR/Contents/MacOS/Switcheroo"
 chmod +x "$APP_DIR/Contents/MacOS/Switcheroo"
 
-cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -48,9 +56,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$VERSION</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Switcheroo opens Terminal to run the official Codex login flow for each account.</string>
 </dict>

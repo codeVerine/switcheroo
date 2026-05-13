@@ -16,7 +16,8 @@ public protocol SwitcherooAppControlling: AnyObject {
 
     func switchToAccount(idOrName: String)
     func deleteAccount(idOrName: String)
-    func syncActiveSnapshot()
+    @discardableResult func syncActiveSnapshot() -> SwitcherooActiveSnapshotSyncResult?
+    func autoSyncDecision(now: Date) -> SwitcherooAutoSyncDecision
     func renameAccount(accountId: String, newName: String)
 }
 

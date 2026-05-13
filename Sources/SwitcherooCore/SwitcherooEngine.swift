@@ -265,23 +265,80 @@ public final class SwitcherooEngine: @unchecked Sendable {
     }
 
     public func syncActiveAccountSnapshotIfNeeded(providerId: String? = nil) throws -> Bool {
+        let result = try syncActiveAccountSnapshot(providerId: providerId)
+        return result.disposition == .updatedExisting
+    }
+
+    public func syncActiveAccountSnapshot(providerId: String? = nil) throws -> SwitcherooActiveSnapshotSyncResult {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)
 
         let providerState = providerConfig(providerId: provider.id)
-        guard let active = try activeAccount(providerId: provider.id) else { return false }
+        guard !providerState.accounts.isEmpty else {
+            return SwitcherooActiveSnapshotSyncResult(
+                disposition: .skippedUnmatchedIdentity,
+                account: nil,
+                accessTokenExpiry: nil
+            )
+        }
         let data = try readActiveAuthData(providerState: providerState, provider: provider)
+        let summary = CodexAuthParsing.summarize(authJSONData: data)
+        let accessTokenExpiry = summary?.accessTokenExpiry
+        guard authIdentityKey(from: data) != nil else {
+            return SwitcherooActiveSnapshotSyncResult(
+                disposition: .skippedNoIdentity,
+                account: nil,
+                accessTokenExpiry: accessTokenExpiry
+            )
+        }
+
+        let active = providerState.activeAccountId.flatMap { id in
+            providerState.accounts.first(where: { $0.id == id })
+        }
         let result = try upsertAuthSnapshot(
             provider: provider,
             authData: data,
-            newAccountId: active.id,
-            newAccountName: active.name,
+            newAccountId: active?.id ?? UUID().uuidString,
+            newAccountName: active?.name ?? "Active account",
             allowCreate: false,
             activate: true,
             activateIfFirst: false,
             writeActiveAuthFileWhenActivated: false
         )
-        return result.disposition != .skippedUnmatchedIdentity
+        let disposition: SwitcherooActiveSnapshotSyncDisposition
+        switch result.disposition {
+        case .updatedExisting, .created:
+            disposition = .updatedExisting
+        case .skippedUnmatchedIdentity:
+            disposition = .skippedUnmatchedIdentity
+        }
+
+        return SwitcherooActiveSnapshotSyncResult(
+            disposition: disposition,
+            account: disposition == .updatedExisting ? result.account : nil,
+            accessTokenExpiry: accessTokenExpiry
+        )
+    }
+
+    public func activeAccessTokenExpiry(providerId: String? = nil) throws -> Date? {
+        try activeAuthInfo(providerId: providerId).accessTokenExpiry
+    }
+
+    public func activeAuthIdentityKey(providerId: String? = nil) throws -> String? {
+        try activeAuthInfo(providerId: providerId).identityKey
+    }
+
+    public func activeAuthInfo(providerId: String? = nil) throws -> SwitcherooActiveAuthInfo {
+        let pid = try resolveProviderId(providerId)
+        let provider = try requireProvider(pid)
+        let providerState = providerConfig(providerId: provider.id)
+        let data = try readActiveAuthData(providerState: providerState, provider: provider)
+
+        let summary = CodexAuthParsing.summarize(authJSONData: data)
+        return SwitcherooActiveAuthInfo(
+            identityKey: summary.flatMap { authIdentityKey(from: $0) },
+            accessTokenExpiry: summary?.accessTokenExpiry
+        )
     }
 
     private func upsertAuthSnapshot(
@@ -306,7 +363,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
         if let existing = matchingAccount(identityKey: identityKey, providerId: provider.id, providerState: &providerState) {
             try secureStore.store(authData, key: secureStoreKey(providerId: provider.id, accountId: existing.id))
 
-            let shouldActivate = activate || activateIfFirst && providerState.accounts.count == 1
+            let shouldActivate = activate || activateIfFirst && !hasActiveAccount(providerState)
             var affected: SwitcherooAccount?
             providerState.accounts = providerState.accounts.map { account in
                 var copy = account
@@ -336,7 +393,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
             return SwitcherooAccountWriteResult(disposition: .skippedUnmatchedIdentity, account: nil)
         }
 
-        let shouldActivate = activate || activateIfFirst && providerState.accounts.isEmpty
+        let shouldActivate = activate || activateIfFirst && !hasActiveAccount(providerState)
         var account = SwitcherooAccount(id: newAccountId, name: newAccountName, identityKey: identityKey)
         account.lastUsedAt = shouldActivate ? Date() : nil
 
@@ -355,35 +412,35 @@ public final class SwitcherooEngine: @unchecked Sendable {
         return SwitcherooAccountWriteResult(disposition: .created, account: account)
     }
 
-	    private func matchingAccount(
-	        identityKey: String?,
-	        providerId: String,
-	        providerState: inout SwitcherooProvider
-	    ) -> SwitcherooAccount? {
-	        guard let identityKey else { return nil }
+    private func matchingAccount(
+        identityKey: String?,
+        providerId: String,
+        providerState: inout SwitcherooProvider
+    ) -> SwitcherooAccount? {
+        guard let identityKey else { return nil }
 
-	        for index in providerState.accounts.indices {
-	            if providerState.accounts[index].identityKey == identityKey {
-	                return providerState.accounts[index]
-	            }
-	            guard let storedData = try? secureStore.load(key: secureStoreKey(providerId: providerId, accountId: providerState.accounts[index].id)) else {
-	                continue
-	            }
-	            guard let storedIdentityKey = authIdentityKey(from: storedData) else { continue }
+        for index in providerState.accounts.indices {
+            if providerState.accounts[index].identityKey == identityKey {
+                return providerState.accounts[index]
+            }
+            guard let storedData = try? secureStore.load(key: secureStoreKey(providerId: providerId, accountId: providerState.accounts[index].id)) else {
+                continue
+            }
+            guard let storedIdentityKey = authIdentityKey(from: storedData) else { continue }
 
-	            // Identity key semantics can evolve (ex: moving from account_id-only to account_id+email/user_id).
-	            // Always recompute and backfill from the stored snapshot so older configs can still match and
-	            // we avoid false-positive overwrites.
-	            if providerState.accounts[index].identityKey != storedIdentityKey {
-	                providerState.accounts[index].identityKey = storedIdentityKey
-	            }
-	            if storedIdentityKey == identityKey {
-	                return providerState.accounts[index]
-	            }
-	        }
+            // Identity key semantics can evolve (ex: moving from account_id-only to account_id+email/user_id).
+            // Always recompute and backfill from the stored snapshot so older configs can still match and
+            // we avoid false-positive overwrites.
+            if providerState.accounts[index].identityKey != storedIdentityKey {
+                providerState.accounts[index].identityKey = storedIdentityKey
+            }
+            if storedIdentityKey == identityKey {
+                return providerState.accounts[index]
+            }
+        }
 
-	        return nil
-	    }
+        return nil
+    }
 
     private func readActiveAuthData(providerState: SwitcherooProvider, provider: any AgentProvider) throws -> Data {
         let path = activeAuthFilePath(providerState: providerState, provider: provider)
@@ -444,22 +501,25 @@ public final class SwitcherooEngine: @unchecked Sendable {
         "\(providerId):\(accountId)"
     }
 
-	    private func authIdentityKey(from authData: Data) -> String? {
-	        guard let summary = CodexAuthParsing.summarize(authJSONData: authData) else { return nil }
+    private func authIdentityKey(from authData: Data) -> String? {
+        guard let summary = CodexAuthParsing.summarize(authJSONData: authData) else { return nil }
+        return authIdentityKey(from: summary)
+    }
 
-	        let accountId = normalizedIdentityValue(summary.accountId)
-	        let userId = normalizedIdentityValue(summary.userId)
-	        let email = normalizedIdentityValue(summary.email)?.lowercased()
+    private func authIdentityKey(from summary: CodexAuthParsing.Summary) -> String? {
+        let accountId = normalizedIdentityValue(summary.accountId)
+        let userId = normalizedIdentityValue(summary.userId)
+        let email = normalizedIdentityValue(summary.email)?.lowercased()
 
-	        if let accountId {
-	            if let userId { return "account_id:\(accountId)|user_id:\(userId)" }
-	            if let email { return "account_id:\(accountId)|email:\(email)" }
-	            return "account_id:\(accountId)"
-	        }
-	        if let userId { return "user_id:\(userId)" }
-	        if let email { return "email:\(email)" }
-	        return nil
-	    }
+        if let accountId {
+            if let userId { return "account_id:\(accountId)|user_id:\(userId)" }
+            if let email { return "account_id:\(accountId)|email:\(email)" }
+            return "account_id:\(accountId)"
+        }
+        if let userId { return "user_id:\(userId)" }
+        if let email { return "email:\(email)" }
+        return nil
+    }
 
     private func normalizedIdentityValue(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
@@ -493,6 +553,11 @@ public final class SwitcherooEngine: @unchecked Sendable {
     private func replaceProviderState(_ providerState: SwitcherooProvider, in config: inout SwitcherooConfig) {
         config.providers.removeAll(where: { $0.id == providerState.id })
         config.providers.append(providerState)
+    }
+
+    private func hasActiveAccount(_ providerState: SwitcherooProvider) -> Bool {
+        guard let activeAccountId = providerState.activeAccountId else { return false }
+        return providerState.accounts.contains(where: { $0.id == activeAccountId })
     }
 
     private func withConfig<T>(_ body: (SwitcherooConfig) -> T) -> T {

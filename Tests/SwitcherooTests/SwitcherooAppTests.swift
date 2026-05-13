@@ -113,6 +113,49 @@ final class SwitcherooAppTests: XCTestCase {
         XCTAssertEqual(app.state.statusText, "No active account")
     }
 
+    func testAutoSyncDoesNotRequireReloginWhenThereIsNoActiveAccount() throws {
+        let account = makeAccount(id: "acc-1", name: "Configured")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", accounts: [account]),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let app = harness.makeApp()
+        app.refresh()
+
+        let decision = app.autoSyncDecision(now: Date(timeIntervalSince1970: 1_700_000_000))
+
+        XCTAssertEqual(decision, .disabled(requiresRelogin: false))
+        XCTAssertFalse(app.state.requiresRelogin)
+    }
+
+    func testFinalizePendingWithDerivedNameActivatesNewAccountWhenNoneIsActive() throws {
+        let existing = makeAccount(id: "acc-existing", name: "Existing")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", accounts: [existing]),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let app = harness.makeApp()
+        let authData = try makeAuthData(email: "new@example.com", accountId: "acct-new")
+
+        app.startAddAccount(name: "New account")
+        let pending = try XCTUnwrap(app.state.pendingLogin)
+        harness.fileIO.files[pending.expectedAuthFilePath] = authData
+
+        let result = try XCTUnwrap(app.finalizePendingIfReady(setActiveIfFirst: true))
+
+        XCTAssertEqual(result.disposition, .created)
+        let added = try XCTUnwrap(result.account)
+        XCTAssertEqual(app.state.activeAccountId, added.id)
+        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.writes.last?.data, authData)
+    }
+
     func testSelectProviderUpdatesSelectionAndStillRefreshesState() throws {
         let harness = try EngineHarness()
         let app = harness.makeApp(providerDescriptors: [

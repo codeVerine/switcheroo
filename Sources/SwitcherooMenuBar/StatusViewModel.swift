@@ -18,9 +18,11 @@ struct StatusViewModel: Equatable, Sendable {
 
     init(state: SwitcherooAppState, renameDraftAccountId: String?, statusMessage: String? = nil, now: Date) {
         self.title = "Switcheroo"
-        self.versionText = "v1.0"
-        self.errorMessage = state.errorMessage
-        self.statusMessage = state.errorMessage == nil ? statusMessage : nil
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        self.versionText = "v\(version ?? "0.0.0")"
+        let bannerError = state.errorMessage ?? (state.requiresRelogin ? "Re-login required." : nil)
+        self.errorMessage = bannerError
+        self.statusMessage = bannerError == nil ? statusMessage : nil
         self.showHeaderActions = !state.accounts.isEmpty
         self.isEmpty = state.accounts.isEmpty
         let providerDisplayName = Self.providerDisplayName(state: state)

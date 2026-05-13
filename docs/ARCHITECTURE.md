@@ -39,7 +39,9 @@ Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs 
 3. Store it back into Keychain only when it matches an existing Switcheroo account.
 4. If it matches a different existing account than the configured active account, correct the active account id.
 
-The menu bar app runs `sync` on a timer (best-effort). The visible menu bar action for creating a new account from the current logged-in session is “Import logged-in account”.
+The shared app layer runs the same sync path for CLI and menu bar actions. The CLI attempts it once per command. The menu bar app attempts it on launch, before switching accounts, and on a timer only when the active access token is within 2 days and 5 minutes of expiry; otherwise it schedules a later recheck.
+
+The visible menu bar action for creating a new account from the current logged-in session is “Import logged-in account”.
 
 ## Key Types / Files
 
