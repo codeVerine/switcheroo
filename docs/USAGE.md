@@ -14,7 +14,7 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 Controls:
 
 - Refresh: reloads config + active status from disk.
-- Import logged-in account: snapshots the currently logged in provider account from `~/.codex/auth.json` into Switcheroo as a new account.
+- Import logged-in account: snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of creating a duplicate.
 - Add account:
   - Login in Terminal: launches the official `codex login` flow in Terminal for a new account.
 - Accounts list:
@@ -49,8 +49,8 @@ Commands:
 
 Notes:
 
-- `switcheroo add` runs `codex login` with a per-account provider home so Codex writes a fresh `auth.json` for that login. Switcheroo then imports that `auth.json` snapshot and deletes the temporary provider home directory.
-- `switcheroo sync` is best-effort; it does not “refresh” tokens itself. It only re-saves whatever Codex has currently written to `auth.json`.
+- `switcheroo add` runs `codex login` with a per-account provider home so Codex writes a fresh `auth.json` for that login. Switcheroo then imports that snapshot, refreshes an existing matching account if found, and deletes the temporary provider home directory.
+- `switcheroo sync` is best-effort; it does not “refresh” tokens itself. It only re-saves the current `auth.json` when it matches an existing Switcheroo account. It will not create accounts in the background.
 
 ## When To Use Switcheroo
 

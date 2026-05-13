@@ -20,7 +20,7 @@ Not affiliated with OpenAI.
 
 1. Each account’s Codex `auth.json` is stored as an opaque blob in macOS Keychain.
 2. “Switch” replaces the active `~/.codex/auth.json` atomically with the chosen snapshot.
-3. A background “Sync” keeps the currently-active snapshot up to date (best-effort) by re-saving the current `auth.json` back into Keychain.
+3. A background “Sync” keeps known account snapshots up to date (best-effort) when the current `auth.json` matches an existing account.
 
 Docs:
 - [Usage](/docs/USAGE.md)

@@ -47,6 +47,7 @@ final class SwitcherooEngineTests: XCTestCase {
         XCTAssertEqual(savedConfig.defaultProviderId, "codex")
         XCTAssertEqual(provider.activeAccountId, account.id)
         XCTAssertEqual(account.name, "Work")
+        XCTAssertEqual(account.identityKey, "account_id:acct-1|email:work@example.com")
         XCTAssertEqual(harness.secureStore.items["codex:\(pending.accountId)"], authData)
         XCTAssertEqual(harness.fileIO.writes.map(\.path), ["~/.codex/auth.json"])
         XCTAssertEqual(harness.fileIO.writes.first?.permissions, 0o600)
@@ -70,6 +71,7 @@ final class SwitcherooEngineTests: XCTestCase {
 
         XCTAssertNil(provider.activeAccountId)
         XCTAssertEqual(account.name, "Side")
+        XCTAssertEqual(account.identityKey, "account_id:acct-2")
         XCTAssertTrue(harness.fileIO.writes.isEmpty)
     }
 
@@ -103,14 +105,154 @@ final class SwitcherooEngineTests: XCTestCase {
         let harness = try EngineHarness(config: config)
         harness.fileIO.files[activePath] = authData
 
-        let account = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let result = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let account = try XCTUnwrap(result.account)
 
+        XCTAssertEqual(result.disposition, .created)
         XCTAssertEqual(account.name, "dev@example.com")
         let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
         let provider = try XCTUnwrap(savedConfig.providers.first)
         XCTAssertEqual(provider.activeAccountId, account.id)
         XCTAssertEqual(provider.accounts.count, 1)
+        XCTAssertEqual(provider.accounts.first?.identityKey, "account_id:acct-3|email:dev@example.com")
         XCTAssertEqual(harness.secureStore.items["codex:\(account.id)"], authData)
+    }
+
+    func testImportCurrentAccountDoesNotOverwriteExistingWhenAccountIdMatchesButEmailDiffers() throws {
+        let activePath = "/tmp/active/auth.json"
+        let existing = makeAccount(id: "acc-existing", name: "Work", identityKey: "account_id:acct-dup")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", accounts: [existing], activeAuthFilePathOverride: activePath),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let oldData = try makeAuthData(email: "old@example.com", accountId: "acct-dup")
+        let newData = try makeAuthData(email: "new@example.com", accountId: "acct-dup")
+        harness.secureStore.items["codex:\(existing.id)"] = oldData
+        harness.fileIO.files[activePath] = newData
+
+        let result = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let imported = try XCTUnwrap(result.account)
+
+        XCTAssertEqual(result.disposition, .created)
+        XCTAssertNotEqual(imported.id, existing.id)
+        XCTAssertEqual(imported.name, "new@example.com")
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([existing.id, imported.id]))
+        XCTAssertNil(provider.activeAccountId)
+        XCTAssertEqual(harness.secureStore.items["codex:\(existing.id)"], oldData)
+        XCTAssertEqual(harness.secureStore.items["codex:\(imported.id)"], newData)
+    }
+
+    func testImportCurrentAccountWithDuplicateExplicitNamePreservesExistingNameAndActiveWhenNotRequested() throws {
+        let activePath = "/tmp/active/auth.json"
+        let active = makeAccount(id: "acc-active", name: "Active", identityKey: "account_id:acct-active")
+        let duplicate = makeAccount(id: "acc-duplicate", name: "Custom Name", identityKey: "account_id:acct-duplicate")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: active.id,
+                    accounts: [active, duplicate],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let activeAuth = try makeAuthData(email: "active@example.com", accountId: "acct-active")
+        let storedDuplicateAuth = try makeAuthData(email: "old@example.com", accountId: "acct-duplicate")
+        let duplicateAuth = try makeAuthData(email: "duplicate@example.com", accountId: "acct-duplicate")
+        harness.secureStore.items["codex:\(active.id)"] = activeAuth
+        harness.secureStore.items["codex:\(duplicate.id)"] = storedDuplicateAuth
+        harness.fileIO.files[activePath] = duplicateAuth
+
+        let result = try harness.engine.importCurrentAccount(name: "Typed Name", setActive: false)
+        let imported = try XCTUnwrap(result.account)
+
+        XCTAssertEqual(result.disposition, .created)
+        XCTAssertNotEqual(imported.id, duplicate.id)
+        XCTAssertEqual(imported.name, "Typed Name")
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(provider.activeAccountId, active.id)
+        XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([active.id, duplicate.id, imported.id]))
+        XCTAssertEqual(harness.secureStore.items["codex:\(active.id)"], activeAuth)
+        XCTAssertEqual(harness.secureStore.items["codex:\(duplicate.id)"], storedDuplicateAuth)
+        XCTAssertEqual(harness.secureStore.items["codex:\(imported.id)"], duplicateAuth)
+        XCTAssertTrue(harness.fileIO.writes.isEmpty)
+    }
+
+    func testFinalizeAddAccountDoesNotOverwriteExistingWhenAccountIdMatchesButEmailDiffers() throws {
+        let existing = makeAccount(id: "acc-existing", name: "Existing")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", accounts: [existing]),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let oldData = try makeAuthData(email: "old@example.com", accountId: "acct-existing")
+        let newData = try makeAuthData(email: "new@example.com", accountId: "acct-existing")
+        harness.secureStore.items["codex:\(existing.id)"] = oldData
+
+        let pending = try harness.engine.startAddAccount(name: "New Duplicate")
+        harness.fileIO.files[pending.expectedAuthFilePath] = newData
+
+        let result = try harness.engine.finalizeAddAccount(pending, setActive: true)
+        let created = try XCTUnwrap(result.account)
+
+        XCTAssertEqual(result.disposition, .created)
+        XCTAssertEqual(created.id, pending.accountId)
+        XCTAssertEqual(created.name, "New Duplicate")
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(provider.activeAccountId, pending.accountId)
+        XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([existing.id, pending.accountId]))
+        XCTAssertEqual(harness.secureStore.items["codex:\(existing.id)"], oldData)
+        XCTAssertEqual(harness.secureStore.items["codex:\(pending.accountId)"], newData)
+        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.writes.last?.data, newData)
+        XCTAssertEqual(harness.paths.removedPaths, [pending.providerHomePath])
+    }
+
+    func testFinalizeAddAccountDuplicateWithoutSetActivePreservesCurrentActiveAccount() throws {
+        let active = makeAccount(id: "acc-active", name: "Active", identityKey: "account_id:acct-active")
+        let duplicate = makeAccount(id: "acc-duplicate", name: "Duplicate", identityKey: "account_id:acct-duplicate")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", activeAccountId: active.id, accounts: [active, duplicate]),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let activeAuth = try makeAuthData(email: "active@example.com", accountId: "acct-active")
+        let storedDuplicateAuth = try makeAuthData(email: "old@example.com", accountId: "acct-duplicate")
+        let duplicateAuth = try makeAuthData(email: "duplicate@example.com", accountId: "acct-duplicate")
+        harness.secureStore.items["codex:\(active.id)"] = activeAuth
+        harness.secureStore.items["codex:\(duplicate.id)"] = storedDuplicateAuth
+
+        let pending = try harness.engine.startAddAccount(name: "Duplicate Login")
+        harness.fileIO.files[pending.expectedAuthFilePath] = duplicateAuth
+
+        let result = try harness.engine.finalizeAddAccount(pending, setActive: false)
+        let created = try XCTUnwrap(result.account)
+
+        XCTAssertEqual(result.disposition, .created)
+        XCTAssertEqual(created.id, pending.accountId)
+        XCTAssertEqual(created.name, "Duplicate Login")
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(provider.activeAccountId, active.id)
+        XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([active.id, duplicate.id, pending.accountId]))
+        XCTAssertEqual(harness.secureStore.items["codex:\(active.id)"], activeAuth)
+        XCTAssertEqual(harness.secureStore.items["codex:\(duplicate.id)"], storedDuplicateAuth)
+        XCTAssertEqual(harness.secureStore.items["codex:\(pending.accountId)"], duplicateAuth)
+        XCTAssertTrue(harness.fileIO.writes.isEmpty)
+        XCTAssertEqual(harness.paths.removedPaths, [pending.providerHomePath])
     }
 
     func testImportCurrentAccountWithExplicitNameStoresThatName() throws {
@@ -124,13 +266,94 @@ final class SwitcherooEngineTests: XCTestCase {
         let harness = try EngineHarness(config: config)
         harness.fileIO.files[activePath] = try makeAuthData(email: "named@example.com", accountId: "acct-3")
 
-        let account = try harness.engine.importCurrentAccount(name: "Personal", setActive: true)
+        let result = try harness.engine.importCurrentAccount(name: "Personal", setActive: true)
+        let account = try XCTUnwrap(result.account)
 
+        XCTAssertEqual(result.disposition, .created)
         XCTAssertEqual(account.name, "Personal")
         let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
         let provider = try XCTUnwrap(savedConfig.providers.first)
         XCTAssertEqual(provider.activeAccountId, account.id)
         XCTAssertEqual(provider.accounts.first?.name, "Personal")
+        XCTAssertEqual(provider.accounts.first?.identityKey, "account_id:acct-3|email:named@example.com")
+    }
+
+    func testImportCurrentAccountCreatesSeparateAccountWhenAccountIdDiffersEvenIfEmailMatches() throws {
+        let activePath = "/tmp/active/auth.json"
+        let existing = makeAccount(id: "acc-existing", name: "Existing", identityKey: "account_id:acct-existing")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", accounts: [existing], activeAuthFilePathOverride: activePath),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        harness.secureStore.items["codex:\(existing.id)"] = try makeAuthData(email: "same@example.com", accountId: "acct-existing")
+        let newAuth = try makeAuthData(email: "same@example.com", accountId: "acct-new")
+        harness.fileIO.files[activePath] = newAuth
+
+        let result = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let newAccount = try XCTUnwrap(result.account)
+
+        XCTAssertEqual(result.disposition, .created)
+        XCTAssertNotEqual(newAccount.id, existing.id)
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([existing.id, newAccount.id]))
+        XCTAssertNil(provider.activeAccountId)
+        XCTAssertEqual(provider.accounts.first(where: { $0.id == newAccount.id })?.identityKey, "account_id:acct-new|email:same@example.com")
+        XCTAssertEqual(harness.secureStore.items["codex:\(newAccount.id)"], newAuth)
+    }
+
+    func testImportCurrentAccountUpdatesDuplicateByEmailFallbackWhenAccountIdIsMissing() throws {
+        let activePath = "/tmp/active/auth.json"
+        let existing = makeAccount(id: "acc-email", name: "Email Account", identityKey: "email:person@example.com")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", accounts: [existing], activeAuthFilePathOverride: activePath),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let oldData = try makeAuthData(email: "person@example.com")
+        let newData = try makeAuthData(email: " PERSON@EXAMPLE.COM ")
+        harness.secureStore.items["codex:\(existing.id)"] = oldData
+        harness.fileIO.files[activePath] = newData
+
+        let result = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+
+        XCTAssertEqual(result.disposition, .updatedExisting)
+        XCTAssertEqual(result.account?.id, existing.id)
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(provider.accounts.map(\.id), [existing.id])
+        XCTAssertEqual(provider.activeAccountId, existing.id)
+        XCTAssertEqual(harness.secureStore.items["codex:\(existing.id)"], newData)
+    }
+
+    func testImportCurrentAccountCreatesAccountForUnparseableNonEmptyAuth() throws {
+        let activePath = "/tmp/active/auth.json"
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(id: "codex", activeAuthFilePathOverride: activePath),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let authData = Data("not-json-but-non-empty".utf8)
+        harness.fileIO.files[activePath] = authData
+
+        let result = try harness.engine.importCurrentAccount(name: "Manual", setActive: false)
+        let account = try XCTUnwrap(result.account)
+
+        XCTAssertEqual(result.disposition, .created)
+        XCTAssertEqual(account.name, "Manual")
+        XCTAssertNil(account.identityKey)
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        let provider = try XCTUnwrap(savedConfig.providers.first)
+        XCTAssertEqual(provider.accounts.map(\.id), [account.id])
+        XCTAssertNil(provider.accounts.first?.identityKey)
+        XCTAssertEqual(harness.secureStore.items["codex:\(account.id)"], authData)
     }
 
     func testImportCurrentAccountWithDerivedNameFallsBackToAccountIdThenImportedPrefix() throws {
@@ -145,12 +368,12 @@ final class SwitcherooEngineTests: XCTestCase {
 
         let accountIdData = try makeAuthData(accountId: "acct-4")
         harness.fileIO.files[activePath] = accountIdData
-        let accountById = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let accountById = try XCTUnwrap(harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true).account)
 
         XCTAssertEqual(accountById.name, "acct-4")
 
         harness.fileIO.files[activePath] = try makeAuthData()
-        let imported = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: false)
+        let imported = try XCTUnwrap(harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: false).account)
 
         XCTAssertTrue(imported.name.hasPrefix("Imported "))
     }
@@ -267,6 +490,118 @@ final class SwitcherooEngineTests: XCTestCase {
         } else {
             XCTFail("Missing metadata expiry for account")
         }
+    }
+
+    func testSyncActiveSnapshotUpdatesMatchedNonActiveAccountAndCorrectsActiveId() throws {
+        let activePath = "/tmp/active/auth.json"
+        let first = makeAccount(id: "acc-first", name: "First", identityKey: "account_id:acct-first")
+        let second = makeAccount(id: "acc-second", name: "Second", identityKey: "account_id:acct-second")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: first.id,
+                    accounts: [first, second],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let firstAuth = try makeAuthData(email: "first@example.com", accountId: "acct-first")
+        let secondAuth = try makeAuthData(email: "second@example.com", accountId: "acct-second")
+        harness.secureStore.items["codex:\(first.id)"] = firstAuth
+        harness.secureStore.items["codex:\(second.id)"] = try makeAuthData(email: "old-second@example.com", accountId: "acct-second")
+        harness.fileIO.files[activePath] = secondAuth
+
+        let synced = try harness.engine.syncActiveAccountSnapshotIfNeeded()
+
+        XCTAssertFalse(synced)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertEqual(harness.secureStore.items["codex:\(first.id)"], firstAuth)
+        XCTAssertNotEqual(harness.secureStore.items["codex:\(second.id)"], secondAuth)
+    }
+
+    func testSyncActiveSnapshotSkipsUnknownCurrentAuthIdentity() throws {
+        let activePath = "/tmp/active/auth.json"
+        let account = makeAccount(id: "acc-active", name: "Active", identityKey: "account_id:acct-active")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: account.id,
+                    accounts: [account],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let storedAuth = try makeAuthData(email: "active@example.com", accountId: "acct-active")
+        let unknownAuth = try makeAuthData(email: "unknown@example.com", accountId: "acct-unknown")
+        harness.secureStore.items["codex:\(account.id)"] = storedAuth
+        harness.fileIO.files[activePath] = unknownAuth
+
+        let synced = try harness.engine.syncActiveAccountSnapshotIfNeeded()
+
+        XCTAssertFalse(synced)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertEqual(harness.secureStore.items["codex:\(account.id)"], storedAuth)
+        XCTAssertEqual(harness.secureStore.storedKeys, [])
+    }
+
+    func testSyncActiveSnapshotSkipsUnparseableCurrentAuthWithoutOverwritingActiveSnapshot() throws {
+        let activePath = "/tmp/active/auth.json"
+        let account = makeAccount(id: "acc-active", name: "Active", identityKey: "account_id:acct-active")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: account.id,
+                    accounts: [account],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let storedAuth = try makeAuthData(email: "active@example.com", accountId: "acct-active")
+        harness.secureStore.items["codex:\(account.id)"] = storedAuth
+        harness.fileIO.files[activePath] = Data("not-json".utf8)
+
+        let synced = try harness.engine.syncActiveAccountSnapshotIfNeeded()
+
+        XCTAssertFalse(synced)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertEqual(harness.secureStore.items["codex:\(account.id)"], storedAuth)
+        XCTAssertEqual(harness.secureStore.storedKeys, [])
+    }
+
+    func testSyncActiveSnapshotReturnsFalseWhenAccountIdMatchesButEmailDiffers() throws {
+        let activePath = "/tmp/active/auth.json"
+        let account = makeAccount(id: "acc-active", name: "Active")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: account.id,
+                    accounts: [account],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config)
+        let oldAuth = try makeAuthData(email: "old@example.com", accountId: "acct-active")
+        let currentAuth = try makeAuthData(email: "current@example.com", accountId: "acct-active")
+        harness.secureStore.items["codex:\(account.id)"] = oldAuth
+        harness.fileIO.files[activePath] = currentAuth
+
+        let synced = try harness.engine.syncActiveAccountSnapshotIfNeeded()
+
+        XCTAssertFalse(synced)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertEqual(harness.secureStore.items["codex:\(account.id)"], oldAuth)
     }
 
     func testSyncActiveSnapshotReturnsFalseWithoutActiveAccount() throws {

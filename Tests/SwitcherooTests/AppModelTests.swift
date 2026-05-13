@@ -79,6 +79,30 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.renameDraftAccountId, account.id)
         XCTAssertEqual(model.renameDraftPlaceholder, "Derived Name")
         XCTAssertEqual(model.renameDraftText, "")
+        XCTAssertEqual(model.statusMessage, "Added account.")
+        XCTAssertNil(model.state.pendingLogin)
+    }
+
+    func testFinalizePendingDuplicateDoesNotBeginRenameDraft() {
+        let pending = PendingLogin(
+            providerId: "codex",
+            accountId: "pending-dup",
+            accountName: "Work",
+            providerHomePath: "/tmp/pending-dup",
+            expectedAuthFilePath: "/tmp/pending-dup/auth.json"
+        )
+        let account = makeAccount(id: "acc-existing", name: "Existing")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account], pendingLogin: pending, pendingHint: "pending"))
+        app.nextFinalizedAccount = account
+        app.nextFinalizedDisposition = .updatedExisting
+        let model = AppModel(app: app)
+
+        model.finalizePendingIfReady(setActive: false)
+
+        XCTAssertEqual(app.finalizeDerivedCalls, [true])
+        XCTAssertEqual(app.finalizeSetActiveCalls, [])
+        XCTAssertNil(model.renameDraftAccountId)
+        XCTAssertEqual(model.statusMessage, "Refreshed Existing.")
         XCTAssertNil(model.state.pendingLogin)
     }
 
@@ -99,6 +123,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(app.finalizeDerivedCalls, [true])
         XCTAssertEqual(app.finalizeSetActiveCalls, [true])
         XCTAssertNil(model.renameDraftAccountId)
+        XCTAssertNil(model.statusMessage)
         XCTAssertNil(model.state.pendingLogin)
     }
 
@@ -114,7 +139,80 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.renameDraftAccountId, account.id)
         XCTAssertEqual(model.renameDraftPlaceholder, "Imported Name")
         XCTAssertEqual(model.renameDraftText, "")
+        XCTAssertEqual(model.statusMessage, "Imported account.")
         XCTAssertEqual(model.state.accounts.map(\.name), ["Imported Name"])
+    }
+
+    func testImportCurrentDuplicateDoesNotBeginRenameDraft() {
+        let account = makeAccount(id: "acc-4", name: "Existing")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account]))
+        app.nextImportedAccount = account
+        app.nextImportedDisposition = .updatedExisting
+        let model = AppModel(app: app)
+
+        model.importCurrentAccount()
+
+        XCTAssertEqual(app.importCurrentAccountDerivedCalls, [true])
+        XCTAssertNil(model.renameDraftAccountId)
+        XCTAssertEqual(model.statusMessage, "Refreshed Existing.")
+        XCTAssertEqual(model.state.accounts.map(\.name), ["Existing"])
+    }
+
+    func testStatusMessageAutoDismissesAfterConfiguredDelay() async throws {
+        let account = makeAccount(id: "acc-4", name: "Existing")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account]))
+        app.nextImportedAccount = account
+        app.nextImportedDisposition = .updatedExisting
+        let model = AppModel(app: app, statusMessageAutoDismissNanoseconds: 1_000_000)
+
+        model.importCurrentAccount()
+
+        XCTAssertEqual(model.statusMessage, "Refreshed Existing.")
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertNil(model.statusMessage)
+    }
+
+    func testNewStatusMessageCancelsPreviousAutoDismiss() async throws {
+        let first = makeAccount(id: "acc-4", name: "First")
+        let second = makeAccount(id: "acc-5", name: "Second")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [first, second]))
+        app.nextImportedAccount = first
+        app.nextImportedDisposition = .updatedExisting
+        let model = AppModel(app: app, statusMessageAutoDismissNanoseconds: 20_000_000)
+
+        model.importCurrentAccount()
+        XCTAssertEqual(model.statusMessage, "Refreshed First.")
+
+        try await Task.sleep(nanoseconds: 5_000_000)
+
+        app.nextImportedAccount = second
+        model.importCurrentAccount()
+        XCTAssertEqual(model.statusMessage, "Refreshed Second.")
+
+        try await Task.sleep(nanoseconds: 18_000_000)
+
+        XCTAssertEqual(model.statusMessage, "Refreshed Second.")
+
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        XCTAssertNil(model.statusMessage)
+    }
+
+    func testImportCurrentFailureClearsStatusAndPublishesErrorState() {
+        let app = MockSwitcherooApp()
+        app.forceDerivedImportToReturnNil = true
+        app.state.errorMessage = "Missing auth file"
+        let model = AppModel(app: app)
+        model.statusMessage = "Previous status"
+
+        model.importCurrentAccount()
+
+        XCTAssertEqual(app.importCurrentAccountDerivedCalls, [true])
+        XCTAssertNil(model.statusMessage)
+        XCTAssertEqual(model.state.errorMessage, "Missing auth file")
+        XCTAssertNil(model.renameDraftAccountId)
     }
 
     func testSaveRenameDraftUsesTrimmedTextAndPlaceholderFallback() {

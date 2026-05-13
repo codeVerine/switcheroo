@@ -124,6 +124,34 @@ final class SwitcherooCLITests: XCTestCase {
         ])
     }
 
+    func testImportCurrentAndAddReportUpdatedExistingAccountForDuplicates() {
+        let pending = PendingLogin(
+            providerId: "codex",
+            accountId: "pending-dup",
+            accountName: "Derived",
+            providerHomePath: "/tmp/codex/pending-dup",
+            expectedAuthFilePath: "/tmp/codex/pending-dup/auth.json"
+        )
+        let account = makeAccount(id: "acc-existing", name: "Existing")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account]))
+        app.nextPendingLogin = pending
+        app.nextImportedAccount = account
+        app.nextFinalizedAccount = account
+        app.nextImportedDisposition = .updatedExisting
+        app.nextFinalizedDisposition = .updatedExisting
+
+        var output: [String] = []
+        let cli = SwitcherooCLI(app: app, output: { output.append($0) }, errorOutput: { _ in })
+
+        XCTAssertEqual(cli.run(arguments: ["import-current", "Personal"]), 0)
+        XCTAssertEqual(cli.run(arguments: ["add", "Work", "--set-active"]), 0)
+
+        XCTAssertEqual(output, [
+            "Updated existing account 'Existing'.",
+            "Updated existing account 'Existing'.",
+        ])
+    }
+
     func testSwitchDeleteAndMissingArgumentErrors() {
         let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [makeAccount(id: "acc-1", name: "One")]))
         var output: [String] = []

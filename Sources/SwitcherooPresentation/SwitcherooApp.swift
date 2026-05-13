@@ -133,25 +133,13 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
-    public func importCurrentAccount(name: String) {
-        do {
-            let providerId = resolveSelectedProviderId()
-            _ = try engine.importCurrentAccount(providerId: providerId, name: name, setActive: false)
-            refresh()
-        } catch {
-            lock.lock()
-            state.errorMessage = errorMessage(from: error)
-            lock.unlock()
-        }
-    }
-
     @discardableResult
-    public func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccount? {
+    public func importCurrentAccount(name: String) -> SwitcherooAccountWriteResult? {
         do {
             let providerId = resolveSelectedProviderId()
-            let acc = try engine.importCurrentAccountWithDerivedName(providerId: providerId, setActiveIfFirst: setActiveIfFirst)
+            let result = try engine.importCurrentAccount(providerId: providerId, name: name, setActive: false)
             refresh()
-            return acc
+            return result
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
@@ -160,36 +148,55 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
-    public func finalizePendingIfReady(setActive: Bool) {
-        guard let pending = withState({ $0.pendingLogin }) else { return }
-        guard fileIO.fileExists(path: pending.expectedAuthFilePath) else { return }
-
+    @discardableResult
+    public func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult? {
         do {
-            try engine.finalizeAddAccount(pending, setActive: setActive)
-            lock.lock()
-            state.pendingLogin = nil
-            state.pendingHint = nil
-            lock.unlock()
+            let providerId = resolveSelectedProviderId()
+            let result = try engine.importCurrentAccountWithDerivedName(providerId: providerId, setActiveIfFirst: setActiveIfFirst)
             refresh()
+            return result
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
             lock.unlock()
+            return nil
         }
     }
 
-    public func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccount? {
+    @discardableResult
+    public func finalizePendingIfReady(setActive: Bool) -> SwitcherooAccountWriteResult? {
         guard let pending = withState({ $0.pendingLogin }) else { return nil }
         guard fileIO.fileExists(path: pending.expectedAuthFilePath) else { return nil }
 
         do {
-            let acc = try engine.finalizeAddAccountWithDerivedName(pending, setActiveIfFirst: setActiveIfFirst)
+            let result = try engine.finalizeAddAccount(pending, setActive: setActive)
             lock.lock()
             state.pendingLogin = nil
             state.pendingHint = nil
             lock.unlock()
             refresh()
-            return acc
+            return result
+        } catch {
+            lock.lock()
+            state.errorMessage = errorMessage(from: error)
+            lock.unlock()
+            return nil
+        }
+    }
+
+    @discardableResult
+    public func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult? {
+        guard let pending = withState({ $0.pendingLogin }) else { return nil }
+        guard fileIO.fileExists(path: pending.expectedAuthFilePath) else { return nil }
+
+        do {
+            let result = try engine.finalizeAddAccountWithDerivedName(pending, setActiveIfFirst: setActiveIfFirst)
+            lock.lock()
+            state.pendingLogin = nil
+            state.pendingHint = nil
+            lock.unlock()
+            refresh()
+            return result
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)

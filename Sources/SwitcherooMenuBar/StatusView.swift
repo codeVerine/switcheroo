@@ -9,12 +9,16 @@ struct StatusView: View {
         let viewModel = StatusViewModel(
             state: model.state,
             renameDraftAccountId: model.renameDraftAccountId,
+            statusMessage: model.statusMessage,
             now: now
         )
 
         VStack(spacing: 0) {
             header(viewModel)
             separator(horizontalInset: 10)
+            messageBanner(viewModel)
+                .animation(.easeInOut(duration: 0.2), value: viewModel.errorMessage)
+                .animation(.easeInOut(duration: 0.2), value: viewModel.statusMessage)
 
             if viewModel.isEmpty {
                 emptyState(viewModel)
@@ -87,16 +91,6 @@ struct StatusView: View {
     private func accountList(_ viewModel: StatusViewModel) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
-                if let errorMessage = viewModel.errorMessage {
-                    Text(errorMessage)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                }
-
                 ForEach(viewModel.accounts) { account in
                     AccountRow(
                         account: account,
@@ -124,6 +118,29 @@ struct StatusView: View {
             .padding(.bottom, 8)
         }
         .frame(maxHeight: viewModel.accountListMaxHeight)
+    }
+
+    @ViewBuilder
+    private func messageBanner(_ viewModel: StatusViewModel) -> some View {
+        if let errorMessage = viewModel.errorMessage {
+            Text(errorMessage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.danger)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        } else if let statusMessage = viewModel.statusMessage {
+            Text(statusMessage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 
     private func emptyState(_ viewModel: StatusViewModel) -> some View {

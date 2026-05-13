@@ -8,6 +8,7 @@ struct StatusViewModel: Equatable, Sendable {
     let title: String
     let versionText: String
     let errorMessage: String?
+    let statusMessage: String?
     let showHeaderActions: Bool
     let isEmpty: Bool
     let emptyState: EmptyState
@@ -15,10 +16,11 @@ struct StatusViewModel: Equatable, Sendable {
     let footerText: String
     let accountListMaxHeight: CGFloat
 
-    init(state: SwitcherooAppState, renameDraftAccountId: String?, now: Date) {
+    init(state: SwitcherooAppState, renameDraftAccountId: String?, statusMessage: String? = nil, now: Date) {
         self.title = "Switcheroo"
         self.versionText = "v1.0"
         self.errorMessage = state.errorMessage
+        self.statusMessage = state.errorMessage == nil ? statusMessage : nil
         self.showHeaderActions = !state.accounts.isEmpty
         self.isEmpty = state.accounts.isEmpty
         let providerDisplayName = Self.providerDisplayName(state: state)

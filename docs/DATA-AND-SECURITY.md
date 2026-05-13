@@ -11,7 +11,7 @@ This document explains what is stored, where it is stored, and what Switcheroo d
 
 Switcheroo does not attempt to parse, interpret, or modify the contents of `auth.json` beyond copying bytes. If Codex changes the file format, Switcheroo should continue working as long as the file remains a single JSON file that Codex consumes.
 
-Note: the menu-bar UI may perform best-effort, local-only parsing of the stored `auth.json` snapshot to show non-sensitive metadata (for example, access token expiry) and to derive a reasonable default account name (typically an email from the `id_token`). Switcheroo still stores and swaps the full file as opaque bytes.
+Note: the menu-bar UI and account import paths may perform best-effort, local-only parsing of the stored `auth.json` snapshot to show non-sensitive metadata (for example, access token expiry), derive a reasonable default account name, and detect whether an imported account already exists. Switcheroo still stores and swaps the full file as opaque bytes.
 
 ## What Is In `auth.json` (Typical)
 
@@ -73,9 +73,9 @@ Switcheroo does not call any Codex/OpenAI APIs and does not implement token refr
 What it does instead:
 
 - While an account is active, Codex may update `~/.codex/auth.json` on its own (for example when it refreshes a token during normal use).
-- Switcheroo periodically snapshots the active `auth.json` back into Keychain.
-- The menu bar also has an “Import logged-in account” action that creates a new stored account snapshot from the current auth file.
+- Switcheroo periodically snapshots the active `auth.json` back into Keychain when it can match the file to an existing Switcheroo account.
+- The menu bar also has an “Import logged-in account” action that creates a new stored account snapshot from the current auth file, or refreshes an existing matching account instead of creating a duplicate.
 
 Practical takeaway:
 
-- If you want an account’s stored snapshot to stay fresh, make that account active occasionally and run a normal Codex command/app workflow, then let Switcheroo sync.
+- If you want an account’s stored snapshot to stay fresh, make that account active occasionally and run a normal Codex command/app workflow, then let Switcheroo sync. If the current auth file is for an account that has not been added, use the explicit import action.

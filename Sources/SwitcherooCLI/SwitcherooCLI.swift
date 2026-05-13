@@ -1,4 +1,5 @@
 import Foundation
+import SwitcherooCore
 import SwitcherooPresentation
 
 enum SwitcherooCLIError: LocalizedError {
@@ -73,17 +74,17 @@ public struct SwitcherooCLI {
 
         case "import-current":
             let name = try requireArg(args, label: "name")
-            app.importCurrentAccount(name: name)
+            let result = app.importCurrentAccount(name: name)
             app.refresh()
-            output("Imported '\(name)'.")
+            output(importOutput(defaultName: name, result: result))
 
         case "add":
             let name = try requireArg(args, label: "name")
             let setActive = args.contains("--set-active")
             app.startAddAccount(name: name)
-            app.finalizePendingIfReady(setActive: setActive)
+            let result = app.finalizePendingIfReady(setActive: setActive)
             app.refresh()
-            output("Added '\(name)'.")
+            output(addOutput(defaultName: name, result: result))
 
         case "switch":
             let idOrName = try requireArg(args, label: "account-name")
@@ -109,6 +110,24 @@ public struct SwitcherooCLI {
             throw SwitcherooCLIError.missingArgument(label: label)
         }
         return value
+    }
+
+    private func importOutput(defaultName: String, result: SwitcherooAccountWriteResult?) -> String {
+        switch result?.disposition {
+        case .updatedExisting:
+            return "Updated existing account '\(result?.account?.name ?? defaultName)'."
+        default:
+            return "Imported '\(defaultName)'."
+        }
+    }
+
+    private func addOutput(defaultName: String, result: SwitcherooAccountWriteResult?) -> String {
+        switch result?.disposition {
+        case .updatedExisting:
+            return "Updated existing account '\(result?.account?.name ?? defaultName)'."
+        default:
+            return "Added '\(defaultName)'."
+        }
     }
 
     private var usageText: String {

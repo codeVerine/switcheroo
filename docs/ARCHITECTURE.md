@@ -20,8 +20,9 @@ The design goal is to keep the domain and presentation layers provider- and plat
 2. Create a temporary `CODEX_HOME` directory under:
    - `~/Library/Application Support/Switcheroo/login/<provider>/<account-id>/`
 3. Run `codex login` with that `CODEX_HOME` so Codex writes a fresh `auth.json`.
-4. Import that `auth.json` snapshot into Keychain under the account id.
-5. Delete the temporary `CODEX_HOME` directory.
+4. Import that `auth.json` snapshot through the shared auth-snapshot upsert path.
+5. If the auth identity matches an existing account, refresh that account instead of appending a duplicate.
+6. Delete the temporary `CODEX_HOME` directory.
 
 Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs it in-process and attaches to the user’s TTY.
 
@@ -34,7 +35,9 @@ Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs 
 ### Sync
 
 1. Read the active `auth.json` from disk.
-2. Store it back into Keychain for the active account id.
+2. Resolve its best-effort identity from `tokens.account_id`, falling back to email when needed.
+3. Store it back into Keychain only when it matches an existing Switcheroo account.
+4. If it matches a different existing account than the configured active account, correct the active account id.
 
 The menu bar app runs `sync` on a timer (best-effort). The visible menu bar action for creating a new account from the current logged-in session is “Import logged-in account”.
 

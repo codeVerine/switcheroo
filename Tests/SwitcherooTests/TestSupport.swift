@@ -139,7 +139,10 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     var nextPendingLogin: PendingLogin?
     var nextImportedAccount: SwitcherooAccount?
     var nextFinalizedAccount: SwitcherooAccount?
+    var nextImportedDisposition: SwitcherooAccountWriteDisposition = .created
+    var nextFinalizedDisposition: SwitcherooAccountWriteDisposition = .created
     var nextSnapshot: SwitcherooAppState?
+    var forceDerivedImportToReturnNil = false
     var forceDerivedFinalizeToReturnNil = false
 
     init(state: SwitcherooAppState = SwitcherooAppState()) {
@@ -167,53 +170,66 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
         publishPendingLogin(accountName: "New account")
     }
 
-    func importCurrentAccount(name: String) {
+    func importCurrentAccount(name: String) -> SwitcherooAccountWriteResult? {
         importCurrentAccountNameCalls.append(name)
         let account = nextImportedAccount ?? SwitcherooAccount(name: name)
-        state.accounts.append(account)
+        if nextImportedDisposition == .created {
+            state.accounts.append(account)
+        }
         state.errorMessage = nil
         if state.activeAccountId == nil && state.accounts.count == 1 {
             state.activeAccountId = account.id
         }
+        return SwitcherooAccountWriteResult(disposition: nextImportedDisposition, account: account)
     }
 
-    func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccount? {
+    func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult? {
         importCurrentAccountDerivedCalls.append(setActiveIfFirst)
+        if forceDerivedImportToReturnNil {
+            return nil
+        }
         let account = nextImportedAccount ?? SwitcherooAccount(name: "Imported account")
-        state.accounts.append(account)
+        if nextImportedDisposition == .created {
+            state.accounts.append(account)
+        }
         state.errorMessage = nil
         if setActiveIfFirst && state.accounts.count == 1 {
             state.activeAccountId = account.id
         }
-        return account
+        return SwitcherooAccountWriteResult(disposition: nextImportedDisposition, account: account)
     }
 
-    func finalizePendingIfReady(setActive: Bool) {
+    func finalizePendingIfReady(setActive: Bool) -> SwitcherooAccountWriteResult? {
         finalizeSetActiveCalls.append(setActive)
-        guard let pending = state.pendingLogin else { return }
+        guard let pending = state.pendingLogin else { return nil }
         let account = nextFinalizedAccount ?? SwitcherooAccount(id: pending.accountId, name: pending.accountName)
-        state.accounts.append(account)
+        if nextFinalizedDisposition == .created {
+            state.accounts.append(account)
+        }
         state.pendingLogin = nil
         state.pendingHint = nil
         if setActive {
             state.activeAccountId = account.id
         }
+        return SwitcherooAccountWriteResult(disposition: nextFinalizedDisposition, account: account)
     }
 
-    func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccount? {
+    func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult? {
         finalizeDerivedCalls.append(setActiveIfFirst)
         guard let pending = state.pendingLogin else { return nil }
         if forceDerivedFinalizeToReturnNil {
             return nil
         }
         let account = nextFinalizedAccount ?? SwitcherooAccount(id: pending.accountId, name: pending.accountName)
-        state.accounts.append(account)
+        if nextFinalizedDisposition == .created {
+            state.accounts.append(account)
+        }
         state.pendingLogin = nil
         state.pendingHint = nil
         if setActiveIfFirst && state.accounts.count == 1 {
             state.activeAccountId = account.id
         }
-        return account
+        return SwitcherooAccountWriteResult(disposition: nextFinalizedDisposition, account: account)
     }
 
     func switchToAccount(idOrName: String) {
@@ -311,10 +327,11 @@ struct EngineHarness {
 func makeAccount(
     id: String = UUID().uuidString,
     name: String,
+    identityKey: String? = nil,
     createdAt: Date = Date(),
     lastUsedAt: Date? = nil
 ) -> SwitcherooAccount {
-    SwitcherooAccount(id: id, name: name, createdAt: createdAt, lastUsedAt: lastUsedAt)
+    SwitcherooAccount(id: id, name: name, identityKey: identityKey, createdAt: createdAt, lastUsedAt: lastUsedAt)
 }
 
 func makeProviderState(

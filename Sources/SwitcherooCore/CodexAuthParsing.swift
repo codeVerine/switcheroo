@@ -8,6 +8,7 @@ enum CodexAuthParsing {
         var accessTokenExpiry: Date?
         var email: String?
         var accountId: String?
+        var userId: String?
     }
 
     static func summarize(authJSONData: Data) -> Summary? {
@@ -16,10 +17,19 @@ enum CodexAuthParsing {
         }
 
         let accessTokenExp = doc.tokens?.access_token.flatMap { jwtExpiryDate(token: $0) }
-        let email = doc.tokens?.id_token.flatMap { jwtStringClaim(token: $0, claim: "email") }
+        let email = doc.tokens?.id_token.flatMap {
+            jwtStringClaim(token: $0, claim: "email")
+                ?? jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/profile", key: "email")
+                ?? jwtStringClaim(token: $0, claim: "https://api.openai.com/profile.email")
+        }
         let accountId = doc.tokens?.account_id
+        let userId = doc.tokens?.id_token.flatMap {
+            jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/auth", key: "chatgpt_user_id")
+                ?? jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/auth", key: "user_id")
+                ?? jwtStringClaim(token: $0, claim: "sub")
+        }
 
-        return Summary(accessTokenExpiry: accessTokenExp, email: email, accountId: accountId)
+        return Summary(accessTokenExpiry: accessTokenExp, email: email, accountId: accountId, userId: userId)
     }
 
     private struct CodexAuthFile: Decodable {
@@ -51,6 +61,12 @@ enum CodexAuthParsing {
         return payload[claim] as? String
     }
 
+    private static func jwtNestedStringClaim(token: String, claim: String, key: String) -> String? {
+        guard let payload = jwtPayload(token: token) else { return nil }
+        guard let dict = payload[claim] as? [String: Any] else { return nil }
+        return dict[key] as? String
+    }
+
     private static func jwtPayload(token: String) -> [String: Any]? {
         // JWT: header.payload.signature (base64url)
         let parts = token.split(separator: ".")
@@ -79,4 +95,3 @@ enum CodexAuthParsing {
         return Data(base64Encoded: s)
     }
 }
-

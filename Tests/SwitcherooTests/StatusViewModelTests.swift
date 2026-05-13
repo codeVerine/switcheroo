@@ -18,6 +18,7 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.title, "Switcheroo")
         XCTAssertEqual(viewModel.versionText, "v1.0")
         XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.statusMessage)
         XCTAssertFalse(viewModel.showHeaderActions)
         XCTAssertTrue(viewModel.isEmpty)
         XCTAssertEqual(viewModel.emptyState.title, "No accounts configured")
@@ -45,9 +46,10 @@ final class StatusViewModelTests: XCTestCase {
             ]
         )
 
-        let viewModel = StatusViewModel(state: state, renameDraftAccountId: backup.id, now: now)
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: backup.id, statusMessage: "Refreshed Backup.", now: now)
 
         XCTAssertEqual(viewModel.errorMessage, "Sync failed")
+        XCTAssertNil(viewModel.statusMessage)
         XCTAssertTrue(viewModel.showHeaderActions)
         XCTAssertFalse(viewModel.isEmpty)
         XCTAssertEqual(viewModel.footerText, "2 accounts")
@@ -111,6 +113,19 @@ final class StatusViewModelTests: XCTestCase {
         )
         XCTAssertEqual(fiveAccounts.accountListMaxHeight, 232)
         XCTAssertEqual(fiveAccounts.footerText, "5 accounts")
+    }
+
+    func testStatusMessageIsVisibleWhenThereIsNoError() {
+        let account = makeAccount(id: "acc-1", name: "Primary")
+        let viewModel = StatusViewModel(
+            state: SwitcherooAppState(accounts: [account]),
+            renameDraftAccountId: nil,
+            statusMessage: "Refreshed Primary.",
+            now: now
+        )
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(viewModel.statusMessage, "Refreshed Primary.")
     }
 
     func testExpiryDisplayClassifiesRemainingTime() {

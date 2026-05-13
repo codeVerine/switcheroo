@@ -80,11 +80,11 @@ final class SwitcherooAppTests: XCTestCase {
         let emailData = try makeAuthData(email: "current@example.com", accountId: "acct-3")
         harness.fileIO.files[activePath] = emailData
 
-        let first = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let first = try XCTUnwrap(harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true).account)
         XCTAssertEqual(first.name, "current@example.com")
 
         harness.fileIO.files[activePath] = try makeAuthData(accountId: "acct-4")
-        let second = try harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true)
+        let second = try XCTUnwrap(harness.engine.importCurrentAccountWithDerivedName(setActiveIfFirst: true).account)
         XCTAssertEqual(second.name, "acct-4")
 
         let app = harness.makeApp()

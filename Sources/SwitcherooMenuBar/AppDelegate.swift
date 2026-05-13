@@ -53,11 +53,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return
         }
 
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        model.refresh()
-        popover.contentSize = Self.popoverSize(accountCount: model.state.accounts.count)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-    }
+	        NSApplication.shared.activate(ignoringOtherApps: true)
+	        model.refresh()
+	        popover.contentSize = Self.popoverSize(accountCount: model.state.accounts.count)
+	        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+	        // Without explicitly focusing the popover window, the first click inside the popover can be
+	        // treated like an "outside" interaction for transient dismissal purposes.
+	        popover.contentViewController?.view.window?.makeKey()
+	    }
 
     func popoverDidClose(_ notification: Notification) {
         logger.debug("Popover closed")

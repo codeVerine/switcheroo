@@ -8,11 +8,11 @@ public protocol SwitcherooAppControlling: AnyObject {
     func startAddAccount(name: String)
     func startAddAccount()
 
-    func importCurrentAccount(name: String)
-    @discardableResult func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccount?
+    @discardableResult func importCurrentAccount(name: String) -> SwitcherooAccountWriteResult?
+    @discardableResult func importCurrentAccount(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult?
 
-    func finalizePendingIfReady(setActive: Bool)
-    @discardableResult func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccount?
+    @discardableResult func finalizePendingIfReady(setActive: Bool) -> SwitcherooAccountWriteResult?
+    @discardableResult func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult?
 
     func switchToAccount(idOrName: String)
     func deleteAccount(idOrName: String)

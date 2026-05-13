@@ -1,4 +1,5 @@
 import Foundation
+import SwitcherooCore
 import SwitcherooDefaultApp
 import SwitcherooPresentation
 
@@ -8,11 +9,14 @@ final class AppModel: ObservableObject {
     @Published var renameDraftAccountId: String? = nil
     @Published var renameDraftText: String = ""
     @Published var renameDraftPlaceholder: String = ""
+    @Published var statusMessage: String? = nil
 
     private let app: (any SwitcherooAppControlling)?
     private let timersEnabled: Bool
+    private let statusMessageAutoDismissNanoseconds: UInt64
     private var pollTimer: Timer?
     private var syncTimer: Timer?
+    private var statusMessageDismissTask: Task<Void, Never>?
 
     init() {
         do {
@@ -21,32 +25,47 @@ final class AppModel: ObservableObject {
             self.app = app
             self.state = app.snapshot()
             self.timersEnabled = true
+            self.statusMessageAutoDismissNanoseconds = 3_000_000_000
             refresh()
             startBackgroundSync()
         } catch {
             self.app = nil
             self.timersEnabled = false
+            self.statusMessageAutoDismissNanoseconds = 3_000_000_000
             self.state = SwitcherooAppState(errorMessage: error.localizedDescription)
         }
     }
 
-    init(app: any SwitcherooAppControlling, startTimers: Bool = false) {
+    init(
+        app: any SwitcherooAppControlling,
+        startTimers: Bool = false,
+        statusMessageAutoDismissNanoseconds: UInt64 = 3_000_000_000
+    ) {
         self.app = app
         self.timersEnabled = startTimers
+        self.statusMessageAutoDismissNanoseconds = statusMessageAutoDismissNanoseconds
         self.state = app.snapshot()
         if startTimers {
             startBackgroundSync()
         }
     }
 
+    deinit {
+        statusMessageDismissTask?.cancel()
+    }
+
     func refresh() {
         guard let app else { return }
         app.refresh()
         state = app.snapshot()
+        if state.errorMessage != nil {
+            clearStatusMessage()
+        }
     }
 
     func startAddAccount() {
         guard let app else { return }
+        clearStatusMessage()
         app.startAddAccount()
         state = app.snapshot()
         startPendingPoll()
@@ -54,31 +73,40 @@ final class AppModel: ObservableObject {
 
     func importCurrentAccount() {
         guard let app else { return }
-        if let acc = app.importCurrentAccount(setActiveIfFirst: true) {
-            beginRenameDraft(accountId: acc.id, placeholder: acc.name)
+        let result = app.importCurrentAccount(setActiveIfFirst: true)
+        if let result {
+            handleAccountWriteResult(result, createdMessage: "Imported account.")
+        } else {
+            clearStatusMessage()
         }
         state = app.snapshot()
     }
 
     func switchToAccount(_ accountId: String) {
         guard let app else { return }
+        clearStatusMessage()
         app.switchToAccount(idOrName: accountId)
         state = app.snapshot()
     }
 
     func deleteAccount(_ accountId: String) {
         guard let app else { return }
+        clearStatusMessage()
         app.deleteAccount(idOrName: accountId)
         state = app.snapshot()
     }
 
     func finalizePendingIfReady(setActive: Bool) {
         guard let app else { return }
-        if let acc = app.finalizePendingIfReady(setActiveIfFirst: true) {
-            beginRenameDraft(accountId: acc.id, placeholder: acc.name)
-        } else {
+        let result = app.finalizePendingIfReady(setActiveIfFirst: true)
+        if result == nil {
             // For legacy call sites (CLI-style), still support explicit setActive.
-            app.finalizePendingIfReady(setActive: setActive)
+            _ = app.finalizePendingIfReady(setActive: setActive)
+        }
+        if let result {
+            handleAccountWriteResult(result, createdMessage: "Added account.")
+        } else {
+            clearStatusMessage()
         }
         let next = app.snapshot()
         state = next
@@ -121,6 +149,47 @@ final class AppModel: ObservableObject {
         renameDraftAccountId = accountId
         renameDraftText = ""
         renameDraftPlaceholder = placeholder
+    }
+
+    private func handleAccountWriteResult(_ result: SwitcherooAccountWriteResult, createdMessage: String) {
+        switch result.disposition {
+        case .created:
+            if let acc = result.account {
+                beginRenameDraft(accountId: acc.id, placeholder: acc.name)
+            }
+            publishStatusMessage(createdMessage)
+        case .updatedExisting:
+            let name = result.account?.name ?? "account"
+            publishStatusMessage("Refreshed \(name).")
+        case .skippedUnmatchedIdentity:
+            publishStatusMessage("No matching account to refresh.")
+        }
+    }
+
+    private func publishStatusMessage(_ message: String) {
+        statusMessageDismissTask?.cancel()
+        statusMessage = message
+
+        let delay = statusMessageAutoDismissNanoseconds
+        statusMessageDismissTask = Task { [weak self, message] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                guard self?.statusMessage == message else { return }
+                self?.statusMessage = nil
+                self?.statusMessageDismissTask = nil
+            }
+        }
+    }
+
+    private func clearStatusMessage() {
+        statusMessageDismissTask?.cancel()
+        statusMessageDismissTask = nil
+        statusMessage = nil
     }
 
     private func startPendingPoll() {

@@ -8,8 +8,16 @@ import SwitcherooPresentation
 final class StatusViewTests: XCTestCase {
     func testStatusViewBodyBuildsForEmptyAndPopulatedStates() {
         let emptyModel = AppModel(app: MockSwitcherooApp(), startTimers: false)
+        emptyModel.statusMessage = "Imported account."
         let emptyView = StatusView(model: emptyModel, onQuit: {})
         _ = emptyView.body
+
+        let emptyErrorModel = AppModel(
+            app: MockSwitcherooApp(state: SwitcherooAppState(errorMessage: "Missing auth file")),
+            startTimers: false
+        )
+        let emptyErrorView = StatusView(model: emptyErrorModel, onQuit: {})
+        _ = emptyErrorView.body
 
         let account = makeAccount(id: "acc-1", name: "Alpha")
         let populatedApp = MockSwitcherooApp(

@@ -3,14 +3,32 @@ import Foundation
 public struct SwitcherooAccount: Codable, Hashable, Identifiable, Sendable {
     public let id: String
     public var name: String
+    public var identityKey: String?
     public var createdAt: Date
     public var lastUsedAt: Date?
 
-    public init(id: String = UUID().uuidString, name: String, createdAt: Date = Date(), lastUsedAt: Date? = nil) {
+    public init(id: String = UUID().uuidString, name: String, identityKey: String? = nil, createdAt: Date = Date(), lastUsedAt: Date? = nil) {
         self.id = id
         self.name = name
+        self.identityKey = identityKey
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+    }
+}
+
+public enum SwitcherooAccountWriteDisposition: Hashable, Sendable {
+    case created
+    case updatedExisting
+    case skippedUnmatchedIdentity
+}
+
+public struct SwitcherooAccountWriteResult: Hashable, Sendable {
+    public let disposition: SwitcherooAccountWriteDisposition
+    public let account: SwitcherooAccount?
+
+    public init(disposition: SwitcherooAccountWriteDisposition, account: SwitcherooAccount?) {
+        self.disposition = disposition
+        self.account = account
     }
 }
 
