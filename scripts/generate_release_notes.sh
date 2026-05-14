@@ -60,8 +60,8 @@ done < <(git log --first-parent --reverse --format='%h%x09%s' "$range")
   printf '# Switcheroo %s\n\n' "$version"
   printf 'Released on %s.\n\n' "$release_date"
   printf '## Install\n\n'
-  printf -- '- Download `Switcheroo-%s-macos-arm64.dmg` for the app.\n' "$version"
-  printf -- '- Download `switcheroo-%s-macos-arm64.tar.gz` for the CLI binary.\n\n' "$version"
+  printf -- '- Download `Switcheroo-%s-macos-arm64.dmg` for the app (recommended).\n' "$version"
+  printf -- '- Optional: download `switcheroo-%s-macos-arm64.tar.gz` for the CLI binary.\n\n' "$version"
 
   if [[ -s "$breaking_changes_file" ]]; then
     printf '## Breaking Changes\n\n'

@@ -1,11 +1,8 @@
 # Usage
 
-Switcheroo supports two front-ends:
+Switcheroo is primarily a native macOS menu bar app (`SwitcherooMenuBar`).
 
-- Menu bar app: `SwitcherooMenuBar` (built into `dist/Switcheroo.app`)
-- CLI: `switcheroo`
-
-The underlying behavior is the same: Switcheroo stores per-account snapshots of Codex `auth.json`, and swaps the active `auth.json` when you switch accounts. The current build ships with a Codex provider, but the app is structured so other providers can be added in code later.
+It also includes an optional CLI (`switcheroo`) for advanced use and development. Both front-ends call into the same shared app layer (`SwitcherooPresentation` + `SwitcherooCore`), so behavior stays consistent.
 
 ## Menu Bar App
 
@@ -25,10 +22,10 @@ Important behavior: switching updates `~/.codex/auth.json` on disk, but running 
 
 Background behavior:
 
-- Switcheroo attempts a best-effort sync from the active `~/.codex/auth.json` into the matching Keychain snapshot when the menu bar app launches, before a switch, and once per CLI command.
+- Switcheroo attempts a best-effort sync from the active `~/.codex/auth.json` into the matching Keychain snapshot when the menu bar app launches and before a switch. The CLI also does this once per command invocation.
 - The menu bar app only polls every 15 seconds when the active access token has less than 2 days and 5 minutes left. If the active token expiry cannot be read or matched, the menu bar shows `Re-login required.`.
 
-## CLI
+## CLI (Optional)
 
 Build:
 

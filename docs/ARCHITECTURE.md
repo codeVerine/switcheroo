@@ -10,7 +10,11 @@ Switcheroo is a single SwiftPM package with layered targets:
 - `switcheroo` (CLI executable)
 - `SwitcherooMenuBar` (menu bar executable)
 
+The menu bar app is the primary user experience. The CLI exists as an optional, thin frontend over the same shared app layer.
+
 The design goal is to keep the domain and presentation layers provider- and platform-agnostic, and push macOS/Codex specifics behind protocols.
+
+Guardrail: keep business logic in `SwitcherooCore` / `SwitcherooPresentation`. The CLI and menu bar app should only handle UI/UX concerns (argument parsing, rendering, menus) and call into the shared app layer.
 
 ## Core Flow
 

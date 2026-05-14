@@ -12,17 +12,17 @@ This is a SwiftPM package with layered targets:
 - `switcheroo`
 - `SwitcherooMenuBar`
 
-CLI:
-
-```bash
-swift build -c debug --product switcheroo
-./.build/debug/switcheroo list
-```
-
 Menu bar app (dev run):
 
 ```bash
 swift run SwitcherooMenuBar
+```
+
+CLI (optional; mostly for development):
+
+```bash
+swift build -c debug --product switcheroo
+./.build/debug/switcheroo list
 ```
 
 If you need to inspect the modular targets directly, `swift package describe` will show the package graph.

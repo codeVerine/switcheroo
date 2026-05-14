@@ -1,6 +1,8 @@
 # Switcheroo
 
-Switcheroo is a small macOS menu bar app + CLI for **manual** Codex account failover.
+Switcheroo is a small native macOS menu bar app for **manual** Codex account failover.
+
+It also includes an optional CLI, but the menu bar app is the primary user experience.
 
 Use case: you have multiple legit Codex accounts already authenticated locally, and you want a fast toggle when one account hits an auth/service outage (401/5xx/timeouts).
 
@@ -38,12 +40,6 @@ Docs:
 
 Right now this repo ships source-first.
 
-Build CLI:
-```bash
-swift build -c release --product switcheroo
-./.build/release/switcheroo list
-```
-
 Run the menu bar app in development:
 ```bash
 swift run SwitcherooMenuBar
@@ -55,14 +51,20 @@ Build the menu bar `.app` bundle:
 open dist/Switcheroo.app
 ```
 
+Build CLI (optional):
+```bash
+swift build -c release --product switcheroo
+./.build/release/switcheroo list
+```
+
 Note: `dist/` is in `.gitignore` (it’s a local build artifact).
 
 ## GitHub Actions
 
 - `CI` runs on pushes to `main` and pull requests.
 - `Release` runs on `v*` tags and publishes:
-  - `switcheroo-<version>-macos-arm64.tar.gz`
   - `Switcheroo-<version>-macos-arm64.dmg`
+  - `switcheroo-<version>-macos-arm64.tar.gz` (optional CLI)
 - Release notes are generated automatically from git history at publish time.
 
 ## Data Locations
