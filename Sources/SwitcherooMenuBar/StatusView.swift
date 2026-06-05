@@ -29,15 +29,10 @@ struct StatusView: View {
             separator(horizontalInset: 0)
             footer(viewModel)
         }
-        .background(.ultraThinMaterial)
-        .background(Theme.popoverBg)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Theme.popoverBorder, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
         .frame(width: StatusViewModel.popoverWidth)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            model.refresh()
+        }
     }
 
     private func header(_ viewModel: StatusViewModel) -> some View {
@@ -95,6 +90,7 @@ struct StatusView: View {
                     AccountRow(
                         account: account,
                         renameText: $model.renameDraftText,
+                        renamePlaceholder: model.renameDraftPlaceholder,
                         onSwitch: {
                             model.switchToAccount(account.id)
                         },
@@ -145,20 +141,11 @@ struct StatusView: View {
 
     private func emptyState(_ viewModel: StatusViewModel) -> some View {
         VStack(spacing: 16) {
-            IconGlyph(.empty, size: 36)
-                .foregroundStyle(Theme.textQuaternary)
-
-            VStack(spacing: 4) {
-                Text(viewModel.emptyState.title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.textSecondary)
-
-                Text(viewModel.emptyState.message)
-                    .font(.system(size: 11, weight: .regular))
-                    .lineSpacing(2)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Theme.textTertiary)
-            }
+            Text(viewModel.emptyState.message)
+                .font(.system(size: 11, weight: .regular))
+                .lineSpacing(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Theme.textSecondary)
 
             VStack(spacing: 6) {
                 CtaButton(title: viewModel.emptyState.primaryActionTitle, icon: .importCurrent, variant: .primary) {
@@ -182,14 +169,14 @@ struct StatusView: View {
             Text(viewModel.footerText)
                 .font(.system(size: 10, weight: .medium))
                 .tracking(0.1)
-                .foregroundStyle(Theme.textQuaternary)
+                .foregroundStyle(Theme.textSecondary)
 
             Spacer()
 
             Text(viewModel.versionText)
                 .font(.system(size: 10, weight: .medium))
                 .tracking(0.1)
-                .foregroundStyle(Theme.textQuaternary)
+                .foregroundStyle(Theme.textSecondary)
                 .padding(.trailing, 4)
 
             IconButton(
@@ -220,6 +207,7 @@ struct StatusView: View {
 struct AccountRow: View {
     let account: StatusViewModel.Account
     @Binding var renameText: String
+    let renamePlaceholder: String
     let onSwitch: () -> Void
     let onRename: () -> Void
     let onSaveRename: () -> Void
@@ -234,7 +222,7 @@ struct AccountRow: View {
 
             if account.isRenaming {
                 HStack(spacing: 4) {
-                    TextField("", text: $renameText)
+                    TextField(renamePlaceholder, text: $renameText)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                         .textFieldStyle(.plain)
@@ -266,10 +254,29 @@ struct AccountRow: View {
             } else {
                 infoBlock
 
-                if isHovering || account.isActive {
-                    actions
-                        .transition(.opacity)
+                HStack(spacing: 2) {
+                    if isHovering {
+                        IconButton(
+                            icon: .pencil,
+                            tooltip: "Rename",
+                            action: onRename
+                        )
+                        IconButton(
+                            icon: .trash,
+                            tooltip: "Delete",
+                            variant: .danger,
+                            action: onDelete
+                        )
+                    }
+                    if account.showSwitchAction {
+                        IconButton(
+                            icon: .switch,
+                            tooltip: "Switch to this account",
+                            action: onSwitch
+                        )
+                    }
                 }
+                .transition(.opacity)
             }
         }
         .padding(.vertical, 8)
@@ -289,32 +296,23 @@ struct AccountRow: View {
                     .stroke(account.isActive ? .clear : Theme.borderSecondary, lineWidth: 1.5)
             )
             .shadow(color: account.isActive ? Theme.accentGlow : .clear, radius: 3)
-            .frame(width: 6, height: 6)
+            .frame(width: 8, height: 8)
     }
 
     private var infoBlock: some View {
         VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 6) {
-                Text(account.name)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .tracking(-0.125)
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
-
-                if let activeLabel = account.activeLabel {
-                    Text(activeLabel)
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .tracking(0.475)
-                        .foregroundStyle(Theme.accent)
-                }
-            }
+            Text(account.name)
+                .font(.system(size: 12.5, weight: .semibold))
+                .tracking(-0.125)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
 
             HStack(spacing: 8) {
                 if let email = account.email, !email.isEmpty {
                     Text(email)
                         .font(.system(size: 10.5, weight: .regular))
                         .tracking(0.0525)
-                        .foregroundStyle(Theme.textTertiary)
+                        .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
 
@@ -334,29 +332,6 @@ struct AccountRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var actions: some View {
-        HStack(spacing: 2) {
-            if account.showSwitchAction {
-                IconButton(
-                    icon: .switch,
-                    tooltip: "Switch to this account",
-                    action: onSwitch
-                )
-            }
-            IconButton(
-                icon: .pencil,
-                tooltip: "Rename",
-                action: onRename
-            )
-            IconButton(
-                icon: .trash,
-                tooltip: "Delete",
-                variant: .danger,
-                action: onDelete
-            )
-        }
-    }
-
     private var rowBackground: Color {
         if account.isActive { return Theme.rowActiveBg }
         if isHovering { return Theme.rowHover }
@@ -370,7 +345,7 @@ struct AccountRow: View {
         case .warning:
             return Theme.warning
         case .neutral:
-            return Theme.textTertiary
+            return Theme.textSecondary
         }
     }
 
@@ -520,7 +495,7 @@ struct IconButton: View {
         case .default:
             return Theme.textSecondary
         case .danger:
-            return isHovering ? Theme.danger : Theme.textTertiary
+            return isHovering ? Theme.danger : Theme.textSecondary
         case .confirm:
             return .white
         }
@@ -602,22 +577,20 @@ private struct IconGlyph: View {
 }
 
 private enum Theme {
-    static let popoverBg = Color(red: 36 / 255, green: 36 / 255, blue: 40 / 255).opacity(0.96)
-    static let popoverBorder = Color.white.opacity(0.08)
     static let accent = Color(red: 45 / 255, green: 140 / 255, blue: 120 / 255)
     static let accentHover = Color(red: 52 / 255, green: 160 / 255, blue: 138 / 255)
     static let accentGlow = Color(red: 45 / 255, green: 140 / 255, blue: 120 / 255).opacity(0.4)
     static let rowActiveBg = Color(red: 45 / 255, green: 140 / 255, blue: 120 / 255).opacity(0.08)
-    static let rowHover = Color.white.opacity(0.04)
-    static let buttonHover = Color.white.opacity(0.07)
-    static let textPrimary = Color.white.opacity(0.92)
-    static let textSecondary = Color.white.opacity(0.65)
-    static let textTertiary = Color.white.opacity(0.40)
-    static let textQuaternary = Color.white.opacity(0.18)
-    static let borderPrimary = Color.white.opacity(0.10)
-    static let borderSecondary = Color.white.opacity(0.15)
-    static let inputBg = Color.black.opacity(0.25)
-    static let separator = Color.white.opacity(0.06)
+    static let textPrimary = Color.primary
+    static let textSecondary = Color.secondary
+    static let textTertiary = Color(nsColor: .tertiaryLabelColor)
+    static let textQuaternary = Color(nsColor: .quaternaryLabelColor)
+    static let borderPrimary = Color(nsColor: .separatorColor)
+    static let borderSecondary = Color(nsColor: .tertiaryLabelColor)
+    static let inputBg = Color.primary.opacity(0.06)
+    static let separator = Color(nsColor: .separatorColor)
+    static let rowHover = Color.primary.opacity(0.04)
+    static let buttonHover = Color.primary.opacity(0.06)
     static let danger = Color(red: 214 / 255, green: 69 / 255, blue: 69 / 255)
     static let dangerBg = Color(red: 214 / 255, green: 69 / 255, blue: 69 / 255).opacity(0.1)
     static let warning = Color(red: 200 / 255, green: 122 / 255, blue: 32 / 255)

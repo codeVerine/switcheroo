@@ -76,12 +76,12 @@ final class AppModel: ObservableObject {
     func importCurrentAccount() {
         guard let app else { return }
         let result = app.importCurrentAccount(setActiveIfFirst: true)
+        state = app.snapshot()
         if let result {
             handleAccountWriteResult(result, createdMessage: "Imported account.")
         } else {
             clearStatusMessage()
         }
-        state = app.snapshot()
         scheduleAutoSync()
     }
 
@@ -104,16 +104,15 @@ final class AppModel: ObservableObject {
         guard let app else { return }
         let result = app.finalizePendingIfReady(setActiveIfFirst: true)
         if result == nil {
-            // For legacy call sites (CLI-style), still support explicit setActive.
             _ = app.finalizePendingIfReady(setActive: setActive)
         }
+        let next = app.snapshot()
+        state = next
         if let result {
             handleAccountWriteResult(result, createdMessage: "Added account.")
         } else {
             clearStatusMessage()
         }
-        let next = app.snapshot()
-        state = next
         scheduleAutoSync()
         if next.pendingLogin == nil {
             stopPendingPoll()
@@ -161,7 +160,8 @@ final class AppModel: ObservableObject {
         switch result.disposition {
         case .created:
             if let acc = result.account {
-                beginRenameDraft(accountId: acc.id, placeholder: acc.name)
+                let placeholder = state.accountMetadataById[acc.id]?.email ?? acc.name
+                beginRenameDraft(accountId: acc.id, placeholder: placeholder)
             }
             publishStatusMessage(createdMessage)
         case .updatedExisting:

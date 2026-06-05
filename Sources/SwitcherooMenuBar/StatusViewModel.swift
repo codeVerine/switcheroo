@@ -3,7 +3,7 @@ import Foundation
 import SwitcherooPresentation
 
 struct StatusViewModel: Equatable, Sendable {
-    static let popoverWidth: CGFloat = 310
+    static let popoverWidth: CGFloat = 300
 
     let title: String
     let versionText: String
@@ -34,7 +34,6 @@ struct StatusViewModel: Equatable, Sendable {
                 email: metadata?.email,
                 isActive: state.activeAccountId == account.id,
                 isRenaming: renameDraftAccountId == account.id,
-                activeLabel: state.activeAccountId == account.id ? "ACTIVE" : nil,
                 expiry: state.accessTokenExpiryByAccountId[account.id].map {
                     ExpiryDisplay.make(expiry: $0, now: now)
                 },
@@ -45,14 +44,14 @@ struct StatusViewModel: Equatable, Sendable {
         self.accountListMaxHeight = Self.accountListMaxHeight(accountCount: state.accounts.count)
         self.emptyState = EmptyState(
             title: "No accounts configured",
-            message: "Import the account currently logged into \(providerDisplayName) on this Mac.\nOr log in via Terminal to add a new account.",
+            message: "Import an existing \(providerDisplayName) session or add a new account via login flow.",
             primaryActionTitle: "Import logged-in account",
             secondaryActionTitle: "Add new account"
         )
     }
 
     private static func footerText(accountCount: Int) -> String {
-        if accountCount == 0 { return "No active session" }
+        if accountCount == 0 { return "No accounts added" }
         return accountCount == 1 ? "1 account" : "\(accountCount) accounts"
     }
 
@@ -86,7 +85,6 @@ struct StatusViewModel: Equatable, Sendable {
         let email: String?
         let isActive: Bool
         let isRenaming: Bool
-        let activeLabel: String?
         let expiry: ExpiryDisplay?
         let showSwitchAction: Bool
     }
