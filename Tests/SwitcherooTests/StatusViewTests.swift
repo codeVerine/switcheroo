@@ -58,6 +58,7 @@ final class StatusViewTests: XCTestCase {
         let activeRow = AccountRow(
             account: activeViewModel.accounts[0],
             renameText: .constant("Alpha"),
+            renamePlaceholder: "alpha@example.com",
             onSwitch: {},
             onRename: {},
             onSaveRename: {},
@@ -70,6 +71,7 @@ final class StatusViewTests: XCTestCase {
         let renamingRow = AccountRow(
             account: renamingViewModel.accounts[0],
             renameText: .constant(""),
+            renamePlaceholder: "alpha@example.com",
             onSwitch: {},
             onRename: {},
             onSaveRename: {},

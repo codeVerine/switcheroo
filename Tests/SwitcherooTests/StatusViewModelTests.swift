@@ -23,10 +23,10 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.showHeaderActions)
         XCTAssertTrue(viewModel.isEmpty)
         XCTAssertEqual(viewModel.emptyState.title, "No accounts configured")
-        XCTAssertEqual(viewModel.emptyState.message, "Import the account currently logged into Codex on this Mac.\nOr log in via Terminal to add a new account.")
+        XCTAssertEqual(viewModel.emptyState.message, "Import an existing Codex session or add a new account via login flow.")
         XCTAssertEqual(viewModel.emptyState.primaryActionTitle, "Import logged-in account")
         XCTAssertEqual(viewModel.emptyState.secondaryActionTitle, "Add new account")
-        XCTAssertEqual(viewModel.footerText, "No active session")
+        XCTAssertEqual(viewModel.footerText, "No accounts added")
         XCTAssertEqual(viewModel.accountListMaxHeight, 12)
     }
 
@@ -62,7 +62,6 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(activeView.email, "primary@example.com")
         XCTAssertTrue(activeView.isActive)
         XCTAssertFalse(activeView.isRenaming)
-        XCTAssertEqual(activeView.activeLabel, "ACTIVE")
         XCTAssertFalse(activeView.showSwitchAction)
         XCTAssertEqual(activeView.expiry?.text, "2h left")
         XCTAssertEqual(activeView.expiry?.kind, .neutral)
@@ -72,7 +71,6 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(backupView.email, "backup@example.com")
         XCTAssertFalse(backupView.isActive)
         XCTAssertTrue(backupView.isRenaming)
-        XCTAssertNil(backupView.activeLabel)
         XCTAssertTrue(backupView.showSwitchAction)
         XCTAssertEqual(backupView.expiry?.text, "5m left")
         XCTAssertEqual(backupView.expiry?.kind, .warning)
