@@ -85,7 +85,7 @@ struct StatusView: View {
 
     private func accountList(_ viewModel: StatusViewModel) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 0) {
+            VStack(spacing: StatusViewModel.accountRowSpacing) {
                 ForEach(viewModel.accounts) { account in
                     AccountRow(
                         account: account,
@@ -109,9 +109,8 @@ struct StatusView: View {
                     )
                 }
             }
-            .padding(.horizontal, 6)
-            .padding(.top, 4)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 8)
+            .padding(.vertical, StatusViewModel.accountListVerticalPadding / 2)
         }
         .frame(maxHeight: viewModel.accountListMaxHeight)
     }
@@ -281,6 +280,7 @@ struct AccountRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
+        .frame(minHeight: StatusViewModel.accountRowHeight)
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .animation(.easeOut(duration: 0.1), value: isHovering)

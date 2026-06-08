@@ -85,7 +85,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(oneAccount.accountListMaxHeight, 67)
+        XCTAssertEqual(oneAccount.accountListMaxHeight, 66)
 
         let fourAccounts = StatusViewModel(
             state: SwitcherooAppState(accounts: [
@@ -97,7 +97,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(fourAccounts.accountListMaxHeight, 232)
+        XCTAssertEqual(fourAccounts.accountListMaxHeight, 234)
 
         let fiveAccounts = StatusViewModel(
             state: SwitcherooAppState(accounts: [
@@ -110,7 +110,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(fiveAccounts.accountListMaxHeight, 232)
+        XCTAssertEqual(fiveAccounts.accountListMaxHeight, 234)
         XCTAssertEqual(fiveAccounts.footerText, "5 accounts")
     }
 

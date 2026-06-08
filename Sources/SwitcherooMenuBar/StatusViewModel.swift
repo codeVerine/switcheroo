@@ -4,6 +4,9 @@ import SwitcherooPresentation
 
 struct StatusViewModel: Equatable, Sendable {
     static let popoverWidth: CGFloat = 300
+    static let accountRowHeight: CGFloat = 50
+    static let accountRowSpacing: CGFloat = 6
+    static let accountListVerticalPadding: CGFloat = 16
 
     let title: String
     let versionText: String
@@ -56,7 +59,12 @@ struct StatusViewModel: Equatable, Sendable {
     }
 
     private static func accountListMaxHeight(accountCount: Int) -> CGFloat {
-        CGFloat(min(accountCount, 4)) * 55 + 12
+        let visibleRows = min(accountCount, 4)
+        guard visibleRows > 0 else { return 12 }
+
+        let rowHeight = CGFloat(visibleRows) * accountRowHeight
+        let rowSpacing = CGFloat(visibleRows - 1) * accountRowSpacing
+        return rowHeight + rowSpacing + accountListVerticalPadding
     }
 
     private static func providerDisplayName(state: SwitcherooAppState) -> String {
