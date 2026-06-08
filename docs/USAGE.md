@@ -4,6 +4,8 @@ Switcheroo is primarily a native macOS menu bar app (`SwitcherooMenuBar`).
 
 It also includes an optional CLI (`switcheroo`) for advanced use and development. Both front-ends call into the same shared app layer (`SwitcherooPresentation` + `SwitcherooCore`), so behavior stays consistent.
 
+Switcheroo is for managing accounts you personally own. It is not a quota bypass tool, account-sharing tool, or workaround for OpenAI/Codex usage limits or terms of service. It also does not monitor live usage limits or call OpenAI APIs.
+
 ## Menu Bar App
 
 When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar item.
@@ -52,14 +54,19 @@ Notes:
 
 ## When To Use Switcheroo
 
-Switcheroo is meant for “account down” failover:
+Use Switcheroo when you want to:
 
-- Authentication failures (`401`)
-- Service errors (`5xx`)
-- Timeouts
+- Keep multiple personal Codex account snapshots organized in macOS Keychain.
+- Switch the active local `~/.codex/auth.json` without manually copying files.
+- Import an existing local Codex login or run the official `codex login` flow for another account.
+- Refresh stored snapshots when Codex updates the active account’s auth file during normal use.
 
 It is not meant for:
 
-- Avoiding limits/quotas
-- Automatic switching
-- Running multiple active identities concurrently
+- Bypassing limits, quotas, usage policies, or terms of service.
+- Sharing accounts between users.
+- Pooling credentials across a team.
+- Automatic account switching.
+- Running multiple active identities concurrently.
+
+If Codex is unavailable because of a service-wide or server-side issue, switching accounts is unlikely to help.

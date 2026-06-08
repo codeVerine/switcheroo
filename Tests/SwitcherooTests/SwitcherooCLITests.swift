@@ -193,7 +193,7 @@ final class SwitcherooCLITests: XCTestCase {
         XCTAssertEqual(app.switchCalls, ["acc"])
         XCTAssertEqual(app.deleteCalls, ["One"])
         XCTAssertEqual(output.last, """
-        switcheroo (Codex account failover helper)
+        switcheroo (Codex account switcher)
 
         Usage:
           switcheroo list

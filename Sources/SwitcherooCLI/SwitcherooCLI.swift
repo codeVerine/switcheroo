@@ -143,7 +143,7 @@ public struct SwitcherooCLI {
 
     private var usageText: String {
         """
-        switcheroo (Codex account failover helper)
+        switcheroo (Codex account switcher)
 
         Usage:
           switcheroo list
