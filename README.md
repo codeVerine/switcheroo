@@ -1,4 +1,8 @@
-# Switcheroo
+<p align="center">
+  <img src="Assets/AppIcon.png" alt="Switcheroo app icon" width="120" height="120">
+</p>
+
+<h1 align="center">Switcheroo</h1>
 
 [![Release](https://img.shields.io/github/v/release/codeVerine/switcheroo?label=release)](https://github.com/codeVerine/switcheroo/releases)
 [![CI](https://github.com/codeVerine/switcheroo/actions/workflows/ci.yml/badge.svg)](https://github.com/codeVerine/switcheroo/actions/workflows/ci.yml)
