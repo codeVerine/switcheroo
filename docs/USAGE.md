@@ -5,7 +5,11 @@ Switcheroo is primarily a native macOS menu bar app (`SwitcherooMenuBar`).
 It also includes an optional CLI (`switcheroo`) for advanced use and development. Both front-ends call into the same shared app layer (`SwitcherooPresentation` + `SwitcherooCore`), so behavior stays consistent.
 
 > [!WARNING]
-> Switcheroo is for managing accounts you personally own. It is not a quota bypass tool, account-sharing tool, or workaround for OpenAI/Codex usage limits or terms of service. It also does not monitor live usage limits or call OpenAI APIs.
+> **Disclaimer:** Switcheroo is designed exclusively for individuals who personally own multiple OpenAI/ChatGPT accounts. It is intended to help you manage your own accounts more conveniently.
+>
+> This tool is **not** intended for sharing accounts between multiple users, circumventing OpenAI's terms of service, account pooling, or credential sharing.
+>
+> By using this software, you agree that you are the rightful owner of every account you add to the application. The authors are not responsible for misuse or violations of OpenAI's terms of service.
 
 ## Menu Bar App
 

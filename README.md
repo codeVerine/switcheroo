@@ -14,7 +14,11 @@ Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the a
 > For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
 
 > [!WARNING]
-> Switcheroo is for accounts you personally own. It is not for account sharing, account pooling, credential sharing, or bypassing OpenAI/Codex limits, quotas, policies, or terms of service.
+> **Disclaimer:** Switcheroo is designed exclusively for individuals who personally own multiple OpenAI/ChatGPT accounts. It is intended to help you manage your own accounts more conveniently.
+>
+> This tool is **not** intended for sharing accounts between multiple users, circumventing OpenAI's terms of service, account pooling, or credential sharing.
+>
+> By using this software, you agree that you are the rightful owner of every account you add to the application. The authors are not responsible for misuse or violations of OpenAI's terms of service.
 
 Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs. It just snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
 
@@ -38,7 +42,8 @@ Not affiliated with OpenAI.
 | Manage local auth snapshots for accounts you control. | Monitor live usage limits or quotas. |
 | Replace `~/.codex/auth.json` when you switch. | Refresh tokens itself. |
 | Use local parsing for display metadata such as expiry. | Call OpenAI APIs. |
-| Help avoid manual auth-file copying. | Work around service-wide Codex outages. |
+| Help avoid manual auth-file copying. | Share accounts, pool credentials, or bypass terms of service. |
+| Keep account switching local to your Mac. | Work around service-wide Codex outages. |
 
 ## How It Works
 
