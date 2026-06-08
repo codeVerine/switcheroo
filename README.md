@@ -1,6 +1,6 @@
 # Switcheroo
 
-[![Release](https://img.shields.io/github/v/release/codeVerine/switcheroo?label=release)](https://github.com/codeVerine/switcheroo/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.2-2F855A)](https://github.com/codeVerine/switcheroo/releases/tag/v0.1.2)
 [![CI](https://github.com/codeVerine/switcheroo/actions/workflows/ci.yml/badge.svg)](https://github.com/codeVerine/switcheroo/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-111111?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift)
