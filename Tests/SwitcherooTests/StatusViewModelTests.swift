@@ -21,6 +21,7 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
         XCTAssertNil(viewModel.statusMessage)
         XCTAssertFalse(viewModel.showHeaderActions)
+        XCTAssertTrue(viewModel.canImportCurrentAccount)
         XCTAssertTrue(viewModel.isEmpty)
         XCTAssertEqual(viewModel.emptyState.title, "No accounts configured")
         XCTAssertEqual(viewModel.emptyState.message, "Import an existing Codex session or add a new account via login flow.")
@@ -127,6 +128,53 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.statusMessage, "Refreshed Primary.")
     }
 
+    func testMissingAuthFileErrorUpdatesEmptyStateMessageAndDisablesImport() {
+        let viewModel = StatusViewModel(
+            state: SwitcherooAppState(errorMessage: "Missing auth file at /Users/sagar/.codex/auth.json."),
+            renameDraftAccountId: nil,
+            statusMessage: "Imported account.",
+            now: now
+        )
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.statusMessage)
+        XCTAssertEqual(viewModel.emptyState.message, "No active session is present to import. Log in to Codex via Add new account.")
+        XCTAssertFalse(viewModel.canImportCurrentAccount)
+    }
+
+    func testMissingAuthFileErrorWithAccountsSuppressesBannerAndDisablesImport() {
+        let account = makeAccount(id: "acc-1", name: "Primary")
+        let viewModel = StatusViewModel(
+            state: SwitcherooAppState(
+                errorMessage: "Missing auth file at /Users/sagar/.codex/auth.json.",
+                accounts: [account],
+                activeAccountId: account.id
+            ),
+            renameDraftAccountId: nil,
+            now: now
+        )
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.statusMessage)
+        XCTAssertFalse(viewModel.isEmpty)
+        XCTAssertFalse(viewModel.canImportCurrentAccount)
+    }
+
+    func testOtherErrorsKeepOriginalMessageAndImportEnabled() {
+        let viewModel = StatusViewModel(
+            state: SwitcherooAppState(
+                errorMessage: "Invalid auth file at /Users/sagar/.codex/auth.json.",
+                providers: [ProviderDescriptor(id: "codex", displayName: "Codex")]
+            ),
+            renameDraftAccountId: nil,
+            now: now
+        )
+
+        XCTAssertEqual(viewModel.errorMessage, "Invalid auth file at /Users/sagar/.codex/auth.json.")
+        XCTAssertEqual(viewModel.emptyState.message, "Import an existing Codex session or add a new account via login flow.")
+        XCTAssertTrue(viewModel.canImportCurrentAccount)
+    }
+
     func testReloginWarningUsesCompactErrorBannerAndHidesStatus() {
         let account = makeAccount(id: "acc-1", name: "Primary")
         let viewModel = StatusViewModel(
@@ -138,6 +186,7 @@ final class StatusViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.errorMessage, "Re-login required.")
         XCTAssertNil(viewModel.statusMessage)
+        XCTAssertTrue(viewModel.canImportCurrentAccount)
     }
 
     func testExpiryDisplayClassifiesRemainingTime() {

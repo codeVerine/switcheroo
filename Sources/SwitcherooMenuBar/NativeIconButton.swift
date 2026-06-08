@@ -7,11 +7,12 @@ struct NativeIconButton: NSViewRepresentable {
     let symbolPointSize: CGFloat
     let foregroundColor: Color
     let backgroundColor: Color
+    var isEnabled = true
     @Binding var isHovering: Bool
     let action: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(action: action, isHovering: $isHovering)
+        Coordinator(action: action, isEnabled: isEnabled, isHovering: $isHovering)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -25,6 +26,7 @@ struct NativeIconButton: NSViewRepresentable {
         button.focusRingType = .none
         button.title = ""
         button.toolTip = tooltip
+        button.isEnabled = isEnabled
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.alignment = .center
@@ -54,6 +56,7 @@ struct NativeIconButton: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.action = action
+        context.coordinator.isEnabled = isEnabled
         context.coordinator.isHovering = $isHovering
 
         guard let button = context.coordinator.button else {
@@ -61,6 +64,7 @@ struct NativeIconButton: NSViewRepresentable {
         }
 
         button.toolTip = tooltip
+        button.isEnabled = isEnabled
         button.contentTintColor = NSColor(foregroundColor)
         button.layer?.backgroundColor = NSColor(backgroundColor).cgColor
         button.image = symbolImage()
@@ -77,15 +81,18 @@ struct NativeIconButton: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         var action: () -> Void
+        var isEnabled: Bool
         var isHovering: Binding<Bool>
         weak var button: HoverButton?
 
-        init(action: @escaping () -> Void, isHovering: Binding<Bool>) {
+        init(action: @escaping () -> Void, isEnabled: Bool, isHovering: Binding<Bool>) {
             self.action = action
+            self.isEnabled = isEnabled
             self.isHovering = isHovering
         }
 
         @objc func performAction() {
+            guard isEnabled else { return }
             action()
         }
 

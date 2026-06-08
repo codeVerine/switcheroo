@@ -13,6 +13,7 @@ struct StatusViewModel: Equatable, Sendable {
     let errorMessage: String?
     let statusMessage: String?
     let showHeaderActions: Bool
+    let canImportCurrentAccount: Bool
     let isEmpty: Bool
     let emptyState: EmptyState
     let accounts: [Account]
@@ -23,10 +24,12 @@ struct StatusViewModel: Equatable, Sendable {
         self.title = "Switcheroo"
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         self.versionText = "v\(version ?? "0.0.0")"
-        let bannerError = state.errorMessage ?? (state.requiresRelogin ? "Re-login required." : nil)
-        self.errorMessage = bannerError
-        self.statusMessage = bannerError == nil ? statusMessage : nil
+        let rawError = state.errorMessage ?? (state.requiresRelogin ? "Re-login required." : nil)
+        let isMissingActiveAuthFile = Self.isMissingActiveAuthFileError(rawError)
+        self.errorMessage = isMissingActiveAuthFile ? nil : rawError
+        self.statusMessage = rawError == nil ? statusMessage : nil
         self.showHeaderActions = !state.accounts.isEmpty
+        self.canImportCurrentAccount = !isMissingActiveAuthFile
         self.isEmpty = state.accounts.isEmpty
         let providerDisplayName = Self.providerDisplayName(state: state)
         self.accounts = state.accounts.map { account in
@@ -47,7 +50,10 @@ struct StatusViewModel: Equatable, Sendable {
         self.accountListMaxHeight = Self.accountListMaxHeight(accountCount: state.accounts.count)
         self.emptyState = EmptyState(
             title: "No accounts configured",
-            message: "Import an existing \(providerDisplayName) session or add a new account via login flow.",
+            message: Self.emptyStateMessage(
+                providerDisplayName: providerDisplayName,
+                isMissingActiveAuthFile: isMissingActiveAuthFile
+            ),
             primaryActionTitle: "Import logged-in account",
             secondaryActionTitle: "Add new account"
         )
@@ -65,6 +71,18 @@ struct StatusViewModel: Equatable, Sendable {
         let rowHeight = CGFloat(visibleRows) * accountRowHeight
         let rowSpacing = CGFloat(visibleRows - 1) * accountRowSpacing
         return rowHeight + rowSpacing + accountListVerticalPadding
+    }
+
+    private static func isMissingActiveAuthFileError(_ errorMessage: String?) -> Bool {
+        errorMessage?.hasPrefix("Missing auth file at ") == true
+    }
+
+    private static func emptyStateMessage(providerDisplayName: String, isMissingActiveAuthFile: Bool) -> String {
+        if isMissingActiveAuthFile {
+            return "No active session is present to import. Log in to Codex via Add new account."
+        }
+
+        return "Import an existing \(providerDisplayName) session or add a new account via login flow."
     }
 
     private static func providerDisplayName(state: SwitcherooAppState) -> String {

@@ -64,7 +64,8 @@ struct StatusView: View {
                 HStack(spacing: 2) {
                     IconButton(
                         icon: .importCurrent,
-                        tooltip: viewModel.emptyState.primaryActionTitle
+                        tooltip: viewModel.emptyState.primaryActionTitle,
+                        isEnabled: viewModel.canImportCurrentAccount
                     ) {
                         model.importCurrentAccount()
                     }
@@ -147,7 +148,12 @@ struct StatusView: View {
                 .foregroundStyle(Theme.textSecondary)
 
             VStack(spacing: 6) {
-                CtaButton(title: viewModel.emptyState.primaryActionTitle, icon: .importCurrent, variant: .primary) {
+                CtaButton(
+                    title: viewModel.emptyState.primaryActionTitle,
+                    icon: .importCurrent,
+                    variant: .primary,
+                    isEnabled: viewModel.canImportCurrentAccount
+                ) {
                     model.importCurrentAccount()
                 }
 
@@ -371,12 +377,13 @@ struct CtaButton: View {
     let title: String
     let icon: IconKind
     let variant: Variant
+    var isEnabled = true
     let action: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
+        Button(action: performAction) {
             HStack(spacing: 7) {
                 IconGlyph(icon, size: 14)
                 Text(title)
@@ -393,22 +400,32 @@ struct CtaButton: View {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(border, lineWidth: variant == .secondary ? 1 : 0)
             )
+            .opacity(isEnabled ? 1 : 0.48)
         }
         .buttonStyle(.borderless)
-        .onHover { isHovering = $0 }
+        .disabled(!isEnabled)
+        .onHover { isHovering = isEnabled && $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.easeOut(duration: 0.12), value: isEnabled)
+    }
+
+    private func performAction() {
+        guard isEnabled else { return }
+        action()
     }
 
     private var foreground: Color {
-        variant == .primary ? .white : Theme.textSecondary
+        if !isEnabled { return Theme.textTertiary }
+        return variant == .primary ? .white : Theme.textSecondary
     }
 
     private var background: Color {
         switch variant {
         case .primary:
+            if !isEnabled { return Theme.buttonHover }
             return isHovering ? Theme.accentHover : Theme.accent
         case .secondary:
-            return isHovering ? Theme.buttonHover : .clear
+            return isEnabled && isHovering ? Theme.buttonHover : .clear
         }
     }
 
@@ -428,6 +445,7 @@ struct IconButton: View {
     let tooltip: String
     var variant: Variant = .default
     var size: CGFloat = 24
+    var isEnabled = true
     let action: () -> Void
 
     @State private var isHovering = false
@@ -439,6 +457,7 @@ struct IconButton: View {
             symbolPointSize: iconSize,
             foregroundColor: foreground,
             backgroundColor: background,
+            isEnabled: isEnabled,
             isHovering: $isHovering,
             action: action
         )
@@ -491,6 +510,7 @@ struct IconButton: View {
     }
 
     private var foreground: Color {
+        if !isEnabled { return Theme.textQuaternary }
         switch variant {
         case .default:
             return Theme.textSecondary
@@ -502,13 +522,14 @@ struct IconButton: View {
     }
 
     private var background: Color {
+        let isActiveHover = isEnabled && isHovering
         switch variant {
         case .default:
-            return isHovering ? Theme.buttonHover : .clear
+            return isActiveHover ? Theme.buttonHover : .clear
         case .danger:
-            return isHovering ? Theme.dangerBg : .clear
+            return isActiveHover ? Theme.dangerBg : .clear
         case .confirm:
-            return isHovering ? Theme.confirmHover : Theme.confirm
+            return isActiveHover ? Theme.confirmHover : Theme.confirm
         }
     }
 }

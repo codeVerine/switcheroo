@@ -85,11 +85,20 @@ final class StatusViewTests: XCTestCase {
         let ctaPrimary = CtaButton(title: "Sync", icon: .sync, variant: .primary, action: {})
         _ = ctaPrimary.body
 
+        let ctaPrimaryDisabled = CtaButton(title: "Import", icon: .importCurrent, variant: .primary, isEnabled: false, action: {})
+        _ = ctaPrimaryDisabled.body
+
         let ctaSecondary = CtaButton(title: "Add", icon: .terminal, variant: .secondary, action: {})
         _ = ctaSecondary.body
 
+        let ctaSecondaryDisabled = CtaButton(title: "Add", icon: .terminal, variant: .secondary, isEnabled: false, action: {})
+        _ = ctaSecondaryDisabled.body
+
         let defaultIconButton = IconButton(icon: .sync, tooltip: "Sync", action: {})
         _ = defaultIconButton.body
+
+        let disabledIconButton = IconButton(icon: .importCurrent, tooltip: "Import logged-in account", isEnabled: false, action: {})
+        _ = disabledIconButton.body
 
         let importIconButton = IconButton(icon: .importCurrent, tooltip: "Import logged-in account", action: {})
         _ = importIconButton.body
@@ -100,4 +109,5 @@ final class StatusViewTests: XCTestCase {
         let confirmIconButton = IconButton(icon: .check, tooltip: "Save", variant: .confirm, size: 22, action: {})
         _ = confirmIconButton.body
     }
+
 }

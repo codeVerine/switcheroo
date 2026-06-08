@@ -57,4 +57,49 @@ final class NativeIconButtonTests: XCTestCase {
         XCTAssertEqual(hoverEvents, [true, false])
         XCTAssertGreaterThanOrEqual(hoverButton.trackingAreas.count, 1)
     }
+
+    func testDisabledNativeIconButtonDisablesNSButtonAndSuppressesAction() throws {
+        var hovering = false
+        var actionCount = 0
+        let button = NativeIconButton(
+            systemName: "tray.and.arrow.down",
+            tooltip: "Import logged-in account",
+            symbolPointSize: 13,
+            foregroundColor: .secondary,
+            backgroundColor: .clear,
+            isEnabled: false,
+            isHovering: Binding(
+                get: { hovering },
+                set: { hovering = $0 }
+            ),
+            action: {
+                actionCount += 1
+            }
+        )
+
+        let coordinator = button.makeCoordinator()
+        coordinator.performAction()
+        XCTAssertEqual(actionCount, 0)
+
+        let host = NSHostingView(rootView: button.frame(width: 24, height: 24))
+        host.frame = NSRect(x: 0, y: 0, width: 24, height: 24)
+        host.layoutSubtreeIfNeeded()
+
+        let nsButton = try XCTUnwrap(firstButton(in: host))
+        XCTAssertFalse(nsButton.isEnabled)
+    }
+
+    private func firstButton(in view: NSView) -> NSButton? {
+        if let button = view as? NSButton {
+            return button
+        }
+
+        for subview in view.subviews {
+            if let button = firstButton(in: subview) {
+                return button
+            }
+        }
+
+        return nil
+    }
 }
