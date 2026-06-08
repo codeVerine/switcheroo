@@ -1,30 +1,46 @@
 # Switcheroo
 
-Switcheroo is a small native macOS menu bar app for managing and switching between your own Codex CLI accounts.
+[![Release](https://img.shields.io/github/v/release/codeVerine/switcheroo?label=release)](https://github.com/codeVerine/switcheroo/releases)
+[![CI](https://github.com/codeVerine/switcheroo/actions/workflows/ci.yml/badge.svg)](https://github.com/codeVerine/switcheroo/actions/workflows/ci.yml)
+![macOS](https://img.shields.io/badge/macOS-13%2B-111111?logo=apple)
+![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift)
+![Storage](https://img.shields.io/badge/storage-Keychain-2F855A)
 
-It also includes an optional CLI, but the menu bar app is the primary user experience.
+Native macOS menu bar app for managing and switching between your own Codex accounts.
 
-Use case: you personally own multiple Codex accounts and want a local tool that stores each account snapshot safely in Keychain, shows the accounts in one place, and switches the active `~/.codex/auth.json` without manually copying files.
+Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the active `~/.codex/auth.json` from a small menu bar UI. It also ships an optional CLI for scripting and development, but the packaged app is the primary experience.
 
-The codebase is split into a layered SwiftPM package:
+> [!IMPORTANT]
+> For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
 
-- `SwitcherooCore` for provider-agnostic orchestration and protocols
-- `SwitcherooPresentation` for shared app state/actions
-- `SwitcherooCodexProvider` for the built-in Codex adapter
-- `SwitcherooMacAdapters` for macOS config/keychain/process integrations
-- `SwitcherooDefaultApp` for shared shell wiring
+> [!WARNING]
+> Switcheroo is for accounts you personally own. It is not for account sharing, account pooling, credential sharing, or bypassing OpenAI/Codex limits, quotas, policies, or terms of service.
 
 Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs. It just snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
 
 Not affiliated with OpenAI.
 
-## Disclaimer
+## Features
 
-Switcheroo is only intended for individuals managing their own accounts. It is not intended for account sharing, account pooling, credential sharing, or bypassing OpenAI/Codex usage limits, quotas, policies, or terms of service.
+| Feature | What it does |
+| --- | --- |
+| Menu bar switching | Switch the active Codex account from a native macOS menu bar app. |
+| Import existing login | Snapshot the account already logged in at `~/.codex/auth.json`. |
+| Add account | Launch the official `codex login` flow in Terminal for another account. |
+| Keychain storage | Store inactive auth snapshots as generic password items in macOS Keychain. |
+| Snapshot refresh | Best-effort sync keeps known account snapshots fresh when Codex updates the active auth file. |
+| Optional CLI | Use `list`, `current`, `import-current`, `add`, `switch`, `sync`, and `delete` from Terminal. |
 
-If a Codex outage or server-side issue affects the service globally, switching accounts is unlikely to help. Use this tool to organize and switch accounts you rightfully control, and use it at your own risk.
+## Boundaries
 
-## How It Works (In One Minute)
+| Switcheroo does | Switcheroo does not |
+| --- | --- |
+| Manage local auth snapshots for accounts you control. | Monitor live usage limits or quotas. |
+| Replace `~/.codex/auth.json` when you switch. | Refresh tokens itself. |
+| Use local parsing for display metadata such as expiry. | Call OpenAI APIs. |
+| Help avoid manual auth-file copying. | Work around service-wide Codex outages. |
+
+## How It Works
 
 1. Each account’s Codex `auth.json` is stored as an opaque blob in macOS Keychain.
 2. “Switch” replaces the active `~/.codex/auth.json` atomically with the chosen snapshot.
@@ -87,6 +103,18 @@ Note: `dist/` is in `.gitignore` (it’s a local build artifact).
 - Keychain service: `com.switcheroo.codex` (one generic password item per account id)
 - Codex active auth file (default): `~/.codex/auth.json` (Switcheroo swaps this)
 - Logs: `log stream --predicate 'subsystem == "com.switcheroo"' --style compact`
+
+## Package Layout
+
+| Target | Role |
+| --- | --- |
+| `SwitcherooCore` | Provider-agnostic orchestration and protocols. |
+| `SwitcherooPresentation` | Shared app state and actions. |
+| `SwitcherooCodexProvider` | Built-in Codex adapter. |
+| `SwitcherooMacAdapters` | macOS config, Keychain, and process integrations. |
+| `SwitcherooDefaultApp` | Shared shell wiring. |
+| `SwitcherooMenuBar` | Native macOS menu bar app. |
+| `switcheroo` | Optional CLI frontend. |
 
 ## License
 

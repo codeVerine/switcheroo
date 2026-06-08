@@ -4,23 +4,23 @@ Switcheroo is primarily a native macOS menu bar app (`SwitcherooMenuBar`).
 
 It also includes an optional CLI (`switcheroo`) for advanced use and development. Both front-ends call into the same shared app layer (`SwitcherooPresentation` + `SwitcherooCore`), so behavior stays consistent.
 
-Switcheroo is for managing accounts you personally own. It is not a quota bypass tool, account-sharing tool, or workaround for OpenAI/Codex usage limits or terms of service. It also does not monitor live usage limits or call OpenAI APIs.
+> [!WARNING]
+> Switcheroo is for managing accounts you personally own. It is not a quota bypass tool, account-sharing tool, or workaround for OpenAI/Codex usage limits or terms of service. It also does not monitor live usage limits or call OpenAI APIs.
 
 ## Menu Bar App
 
 When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar item.
 
-Controls:
+| Control | Behavior |
+| --- | --- |
+| Refresh | Reloads config and active status from disk. |
+| Import logged-in account | Snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of duplicated. |
+| Add account | Launches the official `codex login` flow in Terminal for a new account. |
+| Switch | Makes that account's snapshot the active `~/.codex/auth.json`. |
+| Delete | Removes the account entry and deletes the corresponding Keychain item. |
 
-- Refresh: reloads config + active status from disk.
-- Import logged-in account: snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of creating a duplicate.
-- Add account:
-  - Login in Terminal: launches the official `codex login` flow in Terminal for a new account.
-- Accounts list:
-  - Switch: makes that account’s snapshot the active `~/.codex/auth.json`.
-  - Delete: removes the account entry and deletes the corresponding Keychain item.
-
-Important behavior: switching updates `~/.codex/auth.json` on disk, but running processes may need to be restarted to pick up the new auth.
+> [!IMPORTANT]
+> For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
 
 Background behavior:
 

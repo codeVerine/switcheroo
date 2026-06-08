@@ -48,6 +48,9 @@ Fixes to try:
 
 Switcheroo swaps the auth file on disk. Existing processes may cache auth in memory.
 
+> [!IMPORTANT]
+> For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
+
 Try:
 
 - Quit/restart the Codex app
@@ -64,4 +67,3 @@ Try:
    - Delete the items
 
 This will remove all saved accounts from Switcheroo.
-
