@@ -28,6 +28,13 @@ Switcheroo is intentionally simple: it does not manage profiles, browser session
 
 Not affiliated with OpenAI.
 
+## Screenshots
+
+<p align="center">
+  <img src="Assets/Screenshots/empty-state.png" alt="Switcheroo empty state" width="360">
+  <img src="Assets/Screenshots/account-list.png" alt="Switcheroo account list" width="360">
+</p>
+
 ## Features
 
 | Feature | What it does |
