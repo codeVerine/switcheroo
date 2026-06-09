@@ -35,6 +35,24 @@ Not affiliated with OpenAI.
   <img src="Assets/Screenshots/account-list.png" alt="Switcheroo account list" width="360">
 </p>
 
+## Install
+
+This repo is release-artifact first. The recommended install path is the packaged app from GitHub Releases.
+
+1. Download the latest `Switcheroo-<version>-macos-arm64.dmg` from [Releases](https://github.com/codeVerine/switcheroo/releases).
+2. Open the DMG and copy `Switcheroo.app` to `/Applications`.
+3. Launch `Switcheroo.app`; it runs as a menu bar item.
+
+### Opening on macOS
+
+Switcheroo release builds are unsigned. If macOS blocks the first launch, open **System Settings → Privacy & Security**, find the Switcheroo security message, click **Open Anyway**, then confirm **Open Anyway** in the dialog.
+
+<p align="center">
+  <img src="Assets/Screenshots/open-anyway.png" alt="macOS Privacy & Security Open Anyway prompt for Switcheroo" width="520">
+</p>
+
+The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64.tar.gz`.
+
 ## Features
 
 | Feature | What it does |
@@ -73,24 +91,6 @@ Docs:
 
 - macOS 13 (Ventura) or later
 - `codex` CLI installed and working in your shell
-
-## Install
-
-This repo is release-artifact first. The recommended install path is the packaged app from GitHub Releases.
-
-1. Download the latest `Switcheroo-<version>-macos-arm64.dmg` from [Releases](https://github.com/codeVerine/switcheroo/releases).
-2. Open the DMG and copy `Switcheroo.app` to `/Applications`.
-3. Launch `Switcheroo.app`; it runs as a menu bar item.
-
-### Opening on macOS
-
-Switcheroo release builds are unsigned. If macOS blocks the first launch, open **System Settings → Privacy & Security**, find the Switcheroo security message, click **Open Anyway**, then confirm **Open Anyway** in the dialog.
-
-<p align="center">
-  <img src="Assets/Screenshots/open-anyway.png" alt="macOS Privacy & Security Open Anyway prompt for Switcheroo" width="520">
-</p>
-
-The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64.tar.gz`.
 
 ## Build From Source
 
