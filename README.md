@@ -41,6 +41,9 @@ This repo is release-artifact first. The recommended install path is the package
 Switcheroo release builds are unsigned. If macOS blocks the first launch, open **System Settings → Privacy & Security**, find the Switcheroo security message, click **Open Anyway**, then confirm **Open Anyway** in the dialog.
 
 <p align="center">
+  <img src="Assets/Screenshots/not-opened.png" alt="macOS Gatekeeper warning that Switcheroo was not opened" width="420">
+  <br>
+  <br>
   <img src="Assets/Screenshots/open-anyway.png" alt="macOS Privacy & Security Open Anyway prompt for Switcheroo" width="520">
 </p>
 
