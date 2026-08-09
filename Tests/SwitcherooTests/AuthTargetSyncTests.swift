@@ -64,10 +64,9 @@ final class AuthTargetSyncTests: XCTestCase {
     func testSwitchRunsEveryConfiguredTargetAdapter() throws {
         let stub = StubAuthTargetAdapter(
             id: "stub-harness",
-            destinationAuthFilePath: "~/.stub-harness/auth.json",
-            destinationKey: "stub-credential"
+            defaultDestinationAuthFilePath: "~/.stub-harness/auth.json"
         )
-        let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
+        let (harness, _, secondId, _, secondAuth) = try makeTwoAccountHarness(
             authTargetAdapters: [PiAuthTargetAdapter(), stub]
         )
         harness.fileIO.files[piAuthPath] = Data(#"{"opencode-go": {"type": "api_key"}}"#.utf8)
@@ -75,19 +74,39 @@ final class AuthTargetSyncTests: XCTestCase {
 
         try harness.engine.switchToAccount(accountIdOrName: secondId)
 
-        XCTAssertEqual(stub.conversionCalls, 1)
-        XCTAssertEqual(stub.mergeCalls, 1)
+        XCTAssertEqual(stub.documentCalls, 1)
         let piDoc = try XCTUnwrap(JSONSerialization.jsonObject(with: harness.fileIO.files[piAuthPath]!) as? [String: Any])
         XCTAssertEqual(Set(piDoc.keys), ["openai-codex", "opencode-go"])
         let stubDoc = try XCTUnwrap(JSONSerialization.jsonObject(with: harness.fileIO.files["~/.stub-harness/auth.json"]!) as? [String: Any])
         XCTAssertEqual(Set(stubDoc.keys), ["stub-credential", "unrelated"])
+        XCTAssertEqual(harness.fileIO.files[activeAuthPath], secondAuth)
+    }
+
+    func testCodexReplacementAndPiSectionUpsertSemanticsRemainDistinct() throws {
+        // A replace-mode target overwrites the whole file; a section target
+        // preserves unrelated entries. Both run through the same orchestration.
+        let replaceStub = StubAuthTargetAdapter(
+            id: "replace-target",
+            defaultDestinationAuthFilePath: "~/.replace-target/auth.json",
+            writeMode: .replaceWithSource
+        )
+        let (harness, _, secondId, _, secondAuth) = try makeTwoAccountHarness(
+            authTargetAdapters: [replaceStub]
+        )
+        harness.fileIO.files["~/.replace-target/auth.json"] = Data("stale unrelated content".utf8)
+
+        try harness.engine.switchToAccount(accountIdOrName: secondId)
+
+        XCTAssertEqual(harness.fileIO.files["~/.replace-target/auth.json"], secondAuth)
+        // The pi file was untouched: no section adapter is registered here.
+        XCTAssertNil(harness.fileIO.files[piAuthPath])
     }
 
     // MARK: - Safe failure behavior
 
     func testConversionFailureChangesNothing() throws {
         let failing = StubAuthTargetAdapter()
-        failing.conversionError = AuthTargetSyncError.unsupportedSource(targetId: "stub-target", reason: "test failure")
+        failing.documentError = AuthTargetSyncError.unsupportedSource(targetId: "stub-target", reason: "test failure")
         let (harness, _, secondId, firstAuth, _) = try makeTwoAccountHarness(
             authTargetAdapters: [failing]
         )
@@ -120,8 +139,8 @@ final class AuthTargetSyncTests: XCTestCase {
         }
 
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], firstAuth)
-        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
-        XCTAssertEqual(savedConfig.providers.first?.activeAccountId, firstId)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
     }
 
     func testSwitchRollsBackWhenDestinationIsMalformed() throws {
@@ -183,8 +202,8 @@ final class AuthTargetSyncTests: XCTestCase {
         }
 
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], Data("concurrent-overwrite".utf8))
-        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
-        XCTAssertEqual(savedConfig.providers.first?.activeAccountId, firstId)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
     }
 
     // MARK: - Activation writes (add/import with set-active)
@@ -225,9 +244,10 @@ final class AuthTargetSyncTests: XCTestCase {
         // Keychain snapshot removed, config untouched, no active auth file left behind.
         XCTAssertTrue(harness.secureStore.items.isEmpty)
         XCTAssertNil(harness.fileIO.files["~/.codex/auth.json"])
-        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
-        XCTAssertTrue(savedConfig.providers.isEmpty)
-        XCTAssertNil(savedConfig.defaultProviderId)
+        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        let currentConfig = harness.configStore.config
+        XCTAssertTrue(currentConfig.providers.isEmpty)
+        XCTAssertNil(currentConfig.defaultProviderId)
     }
 
     // MARK: - Fixture

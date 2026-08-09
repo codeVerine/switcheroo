@@ -84,7 +84,6 @@ final class PiAuthTargetAdapterTests: XCTestCase {
     func testMergePreservesUnrelatedProvidersAndReplacesOnlyOpenaiCodex() throws {
         let accessToken = makeJWT(payload: ["exp": 1_700_000_000])
         let authData = try makeCodexAuthData(accessToken: accessToken, refreshToken: "refresh-token-abc")
-        let credential = try adapter.convertedCredential(fromSourceAuthData: authData)
         let existing = Data("""
         {
           "opencode-go": { "type": "api_key", "key": "placeholder-key" },
@@ -92,7 +91,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         }
         """.utf8)
 
-        let merged = try adapter.destinationDocument(byMerging: credential, existingDestinationData: existing)
+        let merged = try adapter.destinationDocument(fromSourceAuthData: authData, existingDestinationData: existing)
 
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["openai-codex", "opencode-go"])
@@ -108,9 +107,8 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
     func testMergeCreatesDocumentWhenDestinationAbsent() throws {
         let authData = try makeCodexAuthData()
-        let credential = try adapter.convertedCredential(fromSourceAuthData: authData)
 
-        let merged = try adapter.destinationDocument(byMerging: credential, existingDestinationData: nil)
+        let merged = try adapter.destinationDocument(fromSourceAuthData: authData, existingDestinationData: nil)
 
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["openai-codex"])
@@ -118,7 +116,6 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
     func testMergeRejectsMalformedDestinationDocuments() throws {
         let authData = try makeCodexAuthData()
-        let credential = try adapter.convertedCredential(fromSourceAuthData: authData)
 
         let malformed: [Data] = [
             Data("not-json".utf8),
@@ -128,7 +125,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         ]
 
         for data in malformed {
-            XCTAssertThrowsError(try adapter.destinationDocument(byMerging: credential, existingDestinationData: data)) { error in
+            XCTAssertThrowsError(try adapter.destinationDocument(fromSourceAuthData: authData, existingDestinationData: data)) { error in
                 guard case AuthTargetSyncError.malformedDestination(let targetId, _) = error else {
                     return XCTFail("Expected malformedDestination, got \(error)")
                 }
@@ -159,7 +156,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
     // MARK: - Destination resolution
 
     func testDestinationPathDefaultsToPiAgentDir() {
-        XCTAssertEqual(adapter.destinationAuthFilePath, "~/.pi/agent/auth.json")
+        XCTAssertEqual(adapter.destinationAuthFilePath(forProviderState: SwitcherooProvider(id: "codex")), "~/.pi/agent/auth.json")
     }
 
     func testDestinationPathHonorsPiCodingAgentDirEnvOverride() throws {
@@ -173,7 +170,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(adapter.destinationAuthFilePath, "/tmp/pi-agent-test/auth.json")
+        XCTAssertEqual(adapter.destinationAuthFilePath(forProviderState: SwitcherooProvider(id: "codex")), "/tmp/pi-agent-test/auth.json")
     }
 
     private func assertUnsupported(

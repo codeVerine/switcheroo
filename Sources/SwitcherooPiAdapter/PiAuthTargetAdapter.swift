@@ -22,11 +22,19 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
     public let id = "pi"
     public let displayName = "Pi"
 
-    public var destinationAuthFilePath: String {
-        if let override = ProcessInfo.processInfo.environment["PI_CODING_AGENT_DIR"], !override.isEmpty {
-            return (override as NSString).appendingPathComponent("auth.json")
-        }
-        return "~/.pi/agent/auth.json"
+    /// Pi's auth file location does not depend on the Codex provider state.
+    public func destinationAuthFilePath(forProviderState providerState: SwitcherooProvider) -> String {
+        resolvedDestinationAuthFilePath
+    }
+
+    public func destinationDocument(fromSourceAuthData sourceAuthData: Data, existingDestinationData: Data?) throws -> Data {
+        let credential = try convertedCredential(fromSourceAuthData: sourceAuthData)
+        return try AuthTargetDocument.merging(
+            credential,
+            into: existingDestinationData,
+            targetId: id,
+            destinationPath: resolvedDestinationAuthFilePath
+        )
     }
 
     public init() {}
@@ -78,5 +86,12 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
             return nil
         }
         return doc.tokens
+    }
+
+    private var resolvedDestinationAuthFilePath: String {
+        if let override = ProcessInfo.processInfo.environment["PI_CODING_AGENT_DIR"], !override.isEmpty {
+            return (override as NSString).appendingPathComponent("auth.json")
+        }
+        return "~/.pi/agent/auth.json"
     }
 }

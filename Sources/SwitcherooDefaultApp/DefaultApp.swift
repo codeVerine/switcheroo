@@ -34,7 +34,10 @@ public struct SwitcherooDefaultAppFactory {
             fileIO: fileIO,
             paths: paths,
             providers: [codexProvider],
-            authTargetAdapters: [PiAuthTargetAdapter()]
+            authTargetAdapters: [
+                CodexAuthTargetAdapter(defaultAuthFilePath: codexProvider.defaultActiveAuthFilePath),
+                PiAuthTargetAdapter(),
+            ]
         )
 
         let providerDescriptors = [

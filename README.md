@@ -150,7 +150,7 @@ Note: `dist/` is in `.gitignore` (it’s a local build artifact).
 | --- | --- |
 | `SwitcherooCore` | Provider-agnostic orchestration, auth-target adapter contract, and protocols. |
 | `SwitcherooPresentation` | Shared app state and actions. |
-| `SwitcherooCodexProvider` | Built-in Codex adapter. |
+| `SwitcherooCodexProvider` | Built-in Codex provider and auth target (whole-file swap). |
 | `SwitcherooPiAdapter` | Built-in Pi auth target (syncs `openai-codex` on switch). |
 | `SwitcherooMacAdapters` | macOS config, Keychain, and process integrations. |
 | `SwitcherooDefaultApp` | Shared shell wiring. |

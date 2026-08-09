@@ -1,28 +1,34 @@
 import Foundation
 
-// Auth-target adapters let Switcheroo mirror the active Codex credential into
-// other harness auth files (Pi is the first built-in target). Orchestration in
-// SwitcherooEngine stays target-agnostic: adapters own identity, conversion,
-// destination resolution, and document merging; the engine owns sequencing and
-// atomic writes.
+// Auth-target adapters let Switcheroo mirror the selected Codex account into
+// every destination auth file through one shared switch orchestration. Codex
+// itself is an adapter (whole-file replacement of the active auth.json); Pi is
+// another (section upsert of openai-codex). Orchestration in SwitcherooEngine
+// stays target-agnostic: adapters own identity, destination resolution,
+// source validation/conversion, and destination-specific preservation or
+// replacement semantics; the engine owns sequencing, atomic writes, and rollback.
 
 public protocol AuthTargetAdapter: Sendable {
     var id: String { get }
     var displayName: String { get }
 
-    /// Path to the target's auth file, which receives the converted credential.
-    var destinationAuthFilePath: String { get }
+    /// Resolve the destination auth file path for a switch against the given
+    /// provider state. Targets whose location is provider-independent (Pi)
+    /// ignore the argument; whole-file targets (Codex) honor provider-level
+    /// path overrides.
+    func destinationAuthFilePath(forProviderState providerState: SwitcherooProvider) -> String
 
-    /// Convert the active Codex auth snapshot into a credential for this target.
-    /// Throws AuthTargetSyncError.unsupportedSource when the snapshot cannot be
-    /// converted (malformed, incomplete, or unsupported source credentials).
-    func convertedCredential(fromSourceAuthData sourceAuthData: Data) throws -> AuthTargetCredential
-
-    /// Produce the full destination document bytes with only `credential.destinationKey`
-    /// replaced, preserving every unrelated top-level entry. `existingDestinationData`
-    /// is nil when the destination auth file does not exist yet. Throws
-    /// AuthTargetSyncError.malformedDestination when the existing document cannot be read.
-    func destinationDocument(byMerging credential: AuthTargetCredential, existingDestinationData: Data?) throws -> Data
+    /// Produce the complete destination document bytes for the source Codex
+    /// auth snapshot, applying this target's preservation/replacement semantics
+    /// against the existing destination data (`nil` when the destination file
+    /// is absent). Whole-file targets replace the document; section targets
+    /// replace only their key and preserve every unrelated top-level entry.
+    ///
+    /// Throws AuthTargetSyncError.unsupportedSource when the source snapshot
+    /// cannot be validated or converted, and
+    /// AuthTargetSyncError.malformedDestination when the existing destination
+    /// document cannot be parsed.
+    func destinationDocument(fromSourceAuthData sourceAuthData: Data, existingDestinationData: Data?) throws -> Data
 }
 
 /// A converted credential destined for one top-level key of the target auth document.
@@ -88,18 +94,8 @@ extension AuthTargetJSON: Codable {
     }
 }
 
-public extension AuthTargetAdapter {
-    /// Default merge: replace only `credential.destinationKey` in the existing
-    /// top-level JSON object, keeping every other entry. An absent destination
-    /// document yields a single-key object.
-    func destinationDocument(byMerging credential: AuthTargetCredential, existingDestinationData: Data?) throws -> Data {
-        try AuthTargetDocument.merging(credential, into: existingDestinationData, targetId: id, destinationPath: destinationAuthFilePath)
-    }
-}
-
-/// Shared destination-document merge used by the default adapter implementation.
-/// Adapters (or test doubles) may reuse it instead of reimplementing preservation
-/// of unrelated top-level entries.
+/// Shared section-upsert merge for adapters that replace one top-level key of
+/// the destination document and preserve every unrelated entry (Pi).
 public enum AuthTargetDocument {
     public static func merging(
         _ credential: AuthTargetCredential,

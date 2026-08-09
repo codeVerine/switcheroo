@@ -1,4 +1,5 @@
 import Foundation
+import SwitcherooCodexProvider
 import SwitcherooCore
 import SwitcherooPresentation
 
@@ -356,8 +357,6 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     }
 }
 
-/// Test double for live account-usage fetching. Handlers are registered per
-/// account id; an optional per-account delay simulates slow responses.
 final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
     private let lock = NSLock()
     private var handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage]
@@ -443,55 +442,59 @@ final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
     }
 }
 
-/// Auth-target adapter test double. Uses the default destination-document merge
-/// implementation so tests exercise the shared contract behavior.
 final class StubAuthTargetAdapter: @unchecked Sendable, AuthTargetAdapter {
+    enum WriteMode {
+        /// Destination becomes exactly the source snapshot (Codex semantics).
+        case replaceWithSource
+        /// Destination keeps every unrelated top-level entry and replaces one key.
+        case upsertKey(String)
+    }
+
     let id: String
     let displayName: String
-    let destinationAuthFilePath: String
-    let destinationKey: String
+    let defaultDestinationAuthFilePath: String
     let convertedValue: AuthTargetJSON
-
-    var conversionError: Error?
-    var mergeError: Error?
-    private(set) var conversionCalls = 0
-    private(set) var mergeCalls = 0
+    var writeMode: WriteMode
+    var documentError: Error?
+    private(set) var documentCalls = 0
 
     init(
         id: String = "stub-target",
         displayName: String = "Stub Target",
-        destinationAuthFilePath: String = "~/.stub-target/auth.json",
+        defaultDestinationAuthFilePath: String = "~/.stub-target/auth.json",
         destinationKey: String = "stub-credential",
-        convertedValue: AuthTargetJSON = .object(["marker": .string("stub")])
+        convertedValue: AuthTargetJSON = .object(["marker": .string("stub")]),
+        writeMode: WriteMode = .upsertKey("stub-credential")
     ) {
         self.id = id
         self.displayName = displayName
-        self.destinationAuthFilePath = destinationAuthFilePath
-        self.destinationKey = destinationKey
+        self.defaultDestinationAuthFilePath = defaultDestinationAuthFilePath
         self.convertedValue = convertedValue
+        self.writeMode = writeMode
     }
 
-    func convertedCredential(fromSourceAuthData sourceAuthData: Data) throws -> AuthTargetCredential {
-        conversionCalls += 1
-        if let conversionError {
-            throw conversionError
-        }
-        return AuthTargetCredential(destinationKey: destinationKey, jsonValue: convertedValue)
+    func destinationAuthFilePath(forProviderState providerState: SwitcherooProvider) -> String {
+        defaultDestinationAuthFilePath
     }
 
-    func destinationDocument(byMerging credential: AuthTargetCredential, existingDestinationData: Data?) throws -> Data {
-        mergeCalls += 1
-        if let mergeError {
-            throw mergeError
+    func destinationDocument(fromSourceAuthData sourceAuthData: Data, existingDestinationData: Data?) throws -> Data {
+        documentCalls += 1
+        if let documentError {
+            throw documentError
         }
-        return try AuthTargetDocument.merging(
-            credential,
-            into: existingDestinationData,
-            targetId: id,
-            destinationPath: destinationAuthFilePath
-        )
+        switch writeMode {
+        case .replaceWithSource:
+            return sourceAuthData
+        case .upsertKey(let key):
+            let credential = AuthTargetCredential(destinationKey: key, jsonValue: convertedValue)
+            return try AuthTargetDocument.merging(
+                credential,
+                into: existingDestinationData,
+                targetId: id,
+                destinationPath: defaultDestinationAuthFilePath
+            )
+        }
     }
-}
 }
 
 struct EngineHarness {
@@ -507,6 +510,7 @@ struct EngineHarness {
         config: SwitcherooConfig = SwitcherooConfig(),
         provider: StubProvider = StubProvider(),
         rootPath: String = "/tmp/switcheroo-tests",
+        includeCodexTarget: Bool = true,
         authTargetAdapters: [any AuthTargetAdapter] = []
     ) throws {
         self.configStore = InMemoryConfigStore(config: config)
@@ -514,14 +518,18 @@ struct EngineHarness {
         self.fileIO = InMemoryFileIO()
         self.paths = InMemoryPaths(rootPath: rootPath)
         self.provider = provider
-        self.authTargetAdapters = authTargetAdapters
+        var adapters = authTargetAdapters
+        if includeCodexTarget {
+            adapters.insert(CodexAuthTargetAdapter(defaultAuthFilePath: provider.defaultActiveAuthFilePath), at: 0)
+        }
+        self.authTargetAdapters = adapters
         self.engine = try SwitcherooEngine(
             configStore: configStore,
             secureStore: secureStore,
             fileIO: fileIO,
             paths: paths,
             providers: [provider],
-            authTargetAdapters: authTargetAdapters
+            authTargetAdapters: adapters
         )
     }
 

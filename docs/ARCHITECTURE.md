@@ -34,38 +34,41 @@ Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs 
 ### Switch
 
 1. Load the Keychain blob for the account id.
-2. Convert and merge that snapshot for every configured auth target (Pi, ...). This is read-only; conversion or merge failures abort before anything is modified.
-3. Atomically overwrite the active Codex auth file (default `~/.codex/auth.json`).
-4. Mark that account as active in config.
-5. Atomically write each target's auth file with user-only permissions (`0o600`).
+2. Convert and merge that snapshot for every configured auth target (Codex, Pi, ...). This is read-only; conversion or merge failures abort before anything is modified.
+3. Atomically write each target's auth file with user-only permissions (`0o600`), in registration order.
+4. Mark that account as active in config and persist.
 
 The same orchestration runs when an "add account" or "import" flow activates an account (set-active), because those paths also rewrite the active Codex auth file.
 
 ### Auth Target Synchronization
 
-Switching an account keeps the active Codex credential and every configured harness auth target in sync, so the same account is selected everywhere without a second login flow. The orchestration lives in `SwitcherooEngine` and is target-agnostic: it knows only the `AuthTargetAdapter` contract.
+Switching an account keeps the active Codex credential and every configured harness auth target in sync, so the same account is selected everywhere without a second login flow. The orchestration lives in `SwitcherooEngine` and is target-agnostic: it invokes every registered adapter through the same prepare/write/rollback process, and each adapter owns its destination-specific write semantics.
 
 `AuthTargetAdapter` (in `Sources/SwitcherooCore/AuthTargetAdapter.swift`) defines the responsibilities of an authentication target:
 
 - target identity: `id`, `displayName`
-- destination resolution: `destinationAuthFilePath`
-- supported source validation/conversion: `convertedCredential(fromSourceAuthData:)`
-- preservation of unrelated destination credentials: `destinationDocument(byMerging:existingDestinationData:)` (default implementation keeps every top-level entry and replaces only the credential key)
+- destination resolution: `destinationAuthFilePath(forProviderState:)`
+- supported source validation/conversion and destination-specific preservation or replacement: `destinationDocument(fromSourceAuthData:existingDestinationData:)`
+- atomic secure writes are the engine's job: every destination is written via temp-file replace with `0o600` permissions, and error text is constructed from fixed strings and paths only (secret-free)
 
-`PiAuthTargetAdapter` is the first built-in target. It converts the active Codex snapshot into Pi's `openai-codex` OAuth credential in-memory (never persisting parsed fields) and merges it into `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json`).
+Built-in adapters:
+
+- `CodexAuthTargetAdapter` (`Sources/SwitcherooCodexProvider/CodexAuthTargetAdapter.swift`): whole-file replacement. The destination becomes exactly the selected opaque Keychain snapshot; the only validation is that the snapshot is non-empty.
+- `PiAuthTargetAdapter` (`Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift`): section upsert. It converts the snapshot into Pi's `openai-codex` OAuth credential in-memory (never persisting parsed fields) and replaces only that top-level key, preserving every other provider entry, in `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json`).
 
 Orchestration and failure semantics:
 
-1. Prepare first: convert and merge for every adapter before any file is written. A malformed, incomplete, or unsupported source credential, or a malformed destination file, fails the whole operation with nothing changed.
-2. Write the active Codex auth file and persist config, then write target files atomically (temp file + replace) with `0o600` permissions. The destination file and its parent directory are created when absent.
-3. On a target write failure, previously written targets and the active Codex auth file are rolled back to their previous bytes. Rollbacks are compare-and-swap guarded: a file is only restored if it still contains exactly what Switcheroo wrote, so a concurrent writer is never clobbered.
-4. If a rollback cannot complete (for example, another process modified a file mid-switch), Switcheroo surfaces a `rollbackIncomplete` error naming the affected files instead of claiming success. Recovery is to repair or remove the affected auth file and switch again.
+1. Prepare first: validate/convert/merge for every adapter before any file is written. A malformed, incomplete, or unsupported source credential, or a malformed destination file, fails the whole operation with nothing changed.
+2. Write every destination atomically (temp file + replace) with `0o600` permissions. Destination files and parent directories are created when absent.
+3. On a write failure, previously written destinations are rolled back to their previous bytes. Rollbacks are compare-and-swap guarded: a file is only restored if it still contains exactly what Switcheroo wrote, so a concurrent writer is never clobbered.
+4. If config persistence fails after the writes, the same compare-and-swap rollback reverts the destinations.
+5. If a rollback cannot complete (for example, another process modified a file mid-switch), Switcheroo surfaces a `rollbackIncomplete` error naming the affected files instead of claiming success. Recovery is to repair or remove the affected auth file and switch again.
 
-The switch therefore behaves all-or-nothing: either both the Codex file and all target files hold the new account, or none of them do (and the error says so).
+The switch therefore behaves all-or-nothing: either every destination file holds the new account, or none of them do (and the error says so).
 
 Adding another built-in auth target:
 
-1. Implement `AuthTargetAdapter` in a new target (mirror `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift`): decide the destination path, convert the Codex snapshot to the target credential (derive identity/expiry via `CodexAuthParsing.summarize`), and use the default document merge or override it.
+1. Implement `AuthTargetAdapter` in a new target (mirror `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift`): decide how the destination path resolves, convert the Codex snapshot to the target credential (derive identity/expiry via `CodexAuthParsing.summarize`), and pick the write semantics - whole-file replacement or a keyed section upsert via the shared `AuthTargetDocument.merging` helper.
 2. Wire it in the composition root (`Sources/SwitcherooDefaultApp/DefaultApp.swift`) by passing the adapter to `SwitcherooEngine` via `authTargetAdapters`.
 3. Add tests: a contract test using the fake adapter plus a conversion test for the new target.
 
@@ -152,8 +155,10 @@ The visible menu bar action for creating a new account from the current logged-i
   - Reusable authenticated base layer for Codex backend APIs: request/header construction, transport protocol, credential parsing. No token refresh (planned for a later task).
 - `Sources/SwitcherooCodexProvider/CodexUsageFetcher.swift`
   - Codex usage endpoint client: response decoding, remaining-allowance derivation, window classification.
+- `Sources/SwitcherooCodexProvider/CodexAuthTargetAdapter.swift`
+  - Codex auth target: whole-file replacement of the active Codex auth.json with the opaque snapshot.
 - `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift`
-  - Pi auth target: converts the active Codex credential to Pi's `openai-codex` OAuth credential.
+  - Pi auth target: converts the active Codex credential to Pi's `openai-codex` OAuth credential and upserts only that section.
 - `Sources/SwitcherooMacAdapters/MacConfigStore.swift`
   - macOS config persistence (`~/Library/Application Support/Switcheroo/config.json`).
 - `Sources/SwitcherooMacAdapters/MacKeychainSecureStore.swift`
