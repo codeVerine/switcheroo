@@ -20,7 +20,7 @@ Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the a
 > [!IMPORTANT]
 > Pi reads its auth file once when the process starts. After switching accounts, restart any running Pi session.
 
-Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs, except for one read-only usage check per saved account: while the menu bar is open (and after account switches), it asks the Codex usage endpoint for each account's remaining five-hour and weekly allowance (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
+Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI or Pi APIs, except for one read-only usage check per saved account: while the menu bar is open (and after account switches), it asks the Codex usage endpoint for each account's remaining five-hour and weekly allowance (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI, and mirrors that account into Pi's auth file.
 
 Not affiliated with OpenAI.
 
