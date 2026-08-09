@@ -21,6 +21,7 @@ public struct SwitcherooAppState: Sendable {
     public var statusText: String
     public var accessTokenExpiryByAccountId: [String: Date]
     public var accountMetadataById: [String: SwitcherooAccountMetadata]
+    public var usageStatesByAccountId: [String: SwitcherooAccountUsageState]
     public var requiresRelogin: Bool
 
     public var pendingLogin: PendingLogin?
@@ -35,6 +36,7 @@ public struct SwitcherooAppState: Sendable {
         statusText: String = "No active account",
         accessTokenExpiryByAccountId: [String: Date] = [:],
         accountMetadataById: [String: SwitcherooAccountMetadata] = [:],
+        usageStatesByAccountId: [String: SwitcherooAccountUsageState] = [:],
         requiresRelogin: Bool = false,
         pendingLogin: PendingLogin? = nil,
         pendingHint: String? = nil
@@ -47,6 +49,7 @@ public struct SwitcherooAppState: Sendable {
         self.statusText = statusText
         self.accessTokenExpiryByAccountId = accessTokenExpiryByAccountId
         self.accountMetadataById = accountMetadataById
+        self.usageStatesByAccountId = usageStatesByAccountId
         self.requiresRelogin = requiresRelogin
         self.pendingLogin = pendingLogin
         self.pendingHint = pendingHint
@@ -57,12 +60,26 @@ public final class SwitcherooApp: @unchecked Sendable {
     private let lock = NSLock()
     private let engine: SwitcherooEngine
     private let fileIO: SwitcherooFileIO
+    private let usageFetcher: (any AccountUsageFetching)?
+    private let usageStalenessInterval: TimeInterval
 
     public private(set) var state: SwitcherooAppState
 
-    public init(engine: SwitcherooEngine, fileIO: SwitcherooFileIO, providers: [ProviderDescriptor]) {
+    private var usageGeneration = 0
+    private var usageTask: Task<Void, Never>?
+    private var usageIdentity: String?
+
+    public init(
+        engine: SwitcherooEngine,
+        fileIO: SwitcherooFileIO,
+        providers: [ProviderDescriptor],
+        usageFetcher: (any AccountUsageFetching)? = nil,
+        usageStalenessInterval: TimeInterval = 60
+    ) {
         self.engine = engine
         self.fileIO = fileIO
+        self.usageFetcher = usageFetcher
+        self.usageStalenessInterval = usageStalenessInterval
         self.state = SwitcherooAppState(providers: providers)
     }
 
@@ -86,11 +103,98 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.accessTokenExpiryByAccountId = expiryById
             state.accountMetadataById = metadataById
             lock.unlock()
+
+            refreshUsageIfNeeded(activeAccountId: activeId)
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
             lock.unlock()
         }
+    }
+
+    /// Kicks off a usage fetch for the active account when one is needed.
+    ///
+    /// - Old-account usage is cleared the moment the active account changes so
+    ///   a switch can never show the previous account's usage.
+    /// - A bounded `.loading` state is published synchronously.
+    /// - In-flight work is cancelled and a generation token is bumped so a
+    ///   slower older response can never overwrite the latest selection.
+    /// - Repeated calls (view refresh, window focus) are cheap: fetches are
+    ///   skipped while one is in flight or when a fresh result already exists.
+    private func refreshUsageIfNeeded(activeAccountId: String?) {
+        let providerId = resolveSelectedProviderId()
+        let identity = providerId.map { "\($0):\(activeAccountId ?? "")" } ?? activeAccountId
+
+        guard let activeAccountId, let usageFetcher, let identity else {
+            lock.lock()
+            usageTask?.cancel()
+            usageTask = nil
+            usageGeneration += 1
+            state.usageStatesByAccountId = [:]
+            usageIdentity = nil
+            lock.unlock()
+            return
+        }
+
+        lock.lock()
+        let activeChanged = usageIdentity != identity
+        usageIdentity = identity
+        if activeChanged {
+            // Immediate transition: drop any stale state from the previous account.
+            usageTask?.cancel()
+            usageGeneration += 1
+            state.usageStatesByAccountId = [:]
+        }
+
+        switch state.usageStatesByAccountId[activeAccountId] {
+        case .loading:
+            lock.unlock()
+            return
+        case .loaded(let usage) where Date().timeIntervalSince(usage.fetchedAt) < usageStalenessInterval:
+            lock.unlock()
+            return
+        default:
+            break
+        }
+
+        state.usageStatesByAccountId[activeAccountId] = .loading
+        usageGeneration += 1
+        let generation = usageGeneration
+        let accountId = activeAccountId
+        usageTask?.cancel()
+        lock.unlock()
+
+        usageTask = Task { [weak self] in
+            guard let self else { return }
+            let next = await self.fetchUsage(accountId: accountId)
+            self.publishUsage(accountId: accountId, generation: generation, state: next)
+        }
+    }
+
+    private func fetchUsage(accountId: String) async -> SwitcherooAccountUsageState {
+        do {
+            let providerId = resolveSelectedProviderId()
+            let authData = try engine.accountAuthData(providerId: providerId, accountId: accountId)
+            let usage = try await usageFetcher?.fetchUsage(authData: authData, accountId: accountId)
+            guard let usage else { return .unavailable(reason: nil) }
+            return .loaded(usage)
+        } catch let error as SwitcherooUsageError {
+            return .unavailable(reason: error.diagnosticMessage)
+        } catch {
+            return .unavailable(reason: errorMessage(from: error))
+        }
+    }
+
+    /// Publishes a usage result only when it still belongs to the latest
+    /// request; older responses (rapid account switching) are dropped.
+    private func publishUsage(accountId: String, generation: Int, state: SwitcherooAccountUsageState) {
+        lock.lock()
+        guard generation == usageGeneration else {
+            lock.unlock()
+            return
+        }
+        self.state.usageStatesByAccountId[accountId] = state
+        lock.unlock()
     }
 
     public func snapshot() -> SwitcherooAppState {

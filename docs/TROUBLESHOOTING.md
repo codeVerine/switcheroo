@@ -56,6 +56,17 @@ Try:
 - Quit/restart the Codex app
 - Re-run your Codex CLI command in a new shell
 
+## "Usage unavailable" in the account dropdown
+
+Switcheroo shows the active account's remaining five-hour and weekly allowance when it can. If the usage row shows `Usage unavailable`, hover it for a hint:
+
+- **Sign-in may have expired** - the saved access token was rejected by the usage endpoint. Make the account active and run `codex login` to refresh its saved snapshot, or use "Import logged-in account" after logging in.
+- **Could not reach the usage service (offline?)** - no network connection or the endpoint timed out. Usage will retry the next time the menu is opened.
+- **Usage service is busy or unavailable right now** - the endpoint returned an error or a rate-limit response. Retry shortly.
+- **Unexpected usage response** - the endpoint's response shape changed or was malformed. The account itself is unaffected; switching still works.
+
+A usage failure never blocks switching accounts, and it never changes or deletes your saved credentials.
+
 ## Reset Switcheroo
 
 1. Quit Switcheroo.

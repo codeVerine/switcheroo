@@ -31,3 +31,11 @@ public protocol AgentProvider {
     func prepareLogin(accountId: String, accountName: String, paths: SwitcherooPaths) throws -> PendingLogin
     func launchLoginInteractive(pending: PendingLogin) throws
 }
+
+/// Fetches live account usage for a single account from its saved credential.
+///
+/// Implementations must never persist, log, or embed credentials in URLs or
+/// error messages. Failures are reported via `SwitcherooUsageError`.
+public protocol AccountUsageFetching: Sendable {
+    func fetchUsage(authData: Data, accountId: String) async throws -> SwitcherooAccountUsage
+}

@@ -306,6 +306,54 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     }
 }
 
+/// Test double for live account-usage fetching. Handlers are registered per
+/// account id; an optional per-account delay simulates slow responses.
+final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage]
+    private var recordedAccountIds: [String] = []
+
+    init(handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage] = [:]) {
+        self.handlers = handlers
+    }
+
+    var callAccountIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedAccountIds
+    }
+
+    func setResult(accountId: String, usage: SwitcherooAccountUsage) {
+        setHandler(accountId: accountId) { usage }
+    }
+
+    func setError(accountId: String, error: Error) {
+        setHandler(accountId: accountId) { throw error }
+    }
+
+    func setHandler(accountId: String, _ handler: @escaping @Sendable () async throws -> SwitcherooAccountUsage) {
+        lock.lock()
+        handlers[accountId] = handler
+        lock.unlock()
+    }
+
+    func fetchUsage(authData: Data, accountId: String) async throws -> SwitcherooAccountUsage {
+        let handler = recordCall(accountId: accountId)
+        if let handler {
+            return try await handler()
+        }
+        throw SwitcherooUsageError.serviceUnavailable
+    }
+
+    private func recordCall(accountId: String) -> (@Sendable () async throws -> SwitcherooAccountUsage)? {
+        lock.lock()
+        recordedAccountIds.append(accountId)
+        let handler = handlers[accountId]
+        lock.unlock()
+        return handler
+    }
+}
+
 struct EngineHarness {
     let configStore: InMemoryConfigStore
     let secureStore: InMemorySecureStore
@@ -384,6 +432,14 @@ func makeAuthData(
         tokens["account_id"] = accountId
     }
 
+    return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
+}
+
+func makeCodexAuthData(accessToken: String = "test-access-token", accountId: String? = "acct-1") throws -> Data {
+    var tokens: [String: Any] = ["access_token": accessToken]
+    if let accountId {
+        tokens["account_id"] = accountId
+    }
     return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
 }
 

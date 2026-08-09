@@ -12,7 +12,9 @@ public enum DefaultLoginStyle: Sendable {
 public struct SwitcherooDefaultAppFactory {
     public init() {}
 
-    public func make(loginStyle: DefaultLoginStyle) throws -> SwitcherooApp {
+    /// Usage display is a menu-bar-only experience; the CLI opts out so its
+    /// commands stay offline-safe.
+    public func make(loginStyle: DefaultLoginStyle, usageFetchingEnabled: Bool = true) throws -> SwitcherooApp {
         let configStore = MacConfigStore()
         let secureStore = MacKeychainSecureStore()
         let fileIO = FoundationFileIO()
@@ -37,7 +39,21 @@ public struct SwitcherooDefaultAppFactory {
             ProviderDescriptor(id: codexProvider.id, displayName: codexProvider.displayName),
         ]
 
-        return SwitcherooApp(engine: engine, fileIO: fileIO, providers: providerDescriptors)
+        let usageClient = CodexAPIClient(
+            baseURL: CodexAPIClient.defaultChatGptBaseURL,
+            pathStyle: .chatgpt,
+            transport: URLSessionCodexTransport()
+        )
+        let usageFetcher: (any AccountUsageFetching)? = usageFetchingEnabled
+            ? CodexUsageFetcher(client: usageClient)
+            : nil
+
+        return SwitcherooApp(
+            engine: engine,
+            fileIO: fileIO,
+            providers: providerDescriptors,
+            usageFetcher: usageFetcher
+        )
     }
 }
 

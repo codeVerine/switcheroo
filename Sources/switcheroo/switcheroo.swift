@@ -7,7 +7,7 @@ struct switcheroo {
     static func main() {
         do {
             let factory = SwitcherooDefaultAppFactory()
-            let app = try factory.make(loginStyle: .cliInteractive)
+            let app = try factory.make(loginStyle: .cliInteractive, usageFetchingEnabled: false)
             let cli = SwitcherooCLI(app: app)
             let exitCode = cli.run(arguments: Array(CommandLine.arguments.dropFirst()))
             exit(Int32(exitCode))

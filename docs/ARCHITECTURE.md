@@ -35,6 +35,18 @@ Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs 
 1. Load the Keychain blob for the account id.
 2. Atomically overwrite the active Codex auth file (default `~/.codex/auth.json`).
 3. Mark that account as active in config.
+4. Refresh usage for the newly active account (see Usage Display below).
+
+### Usage Display
+
+1. On refresh, if the active account changed, any previous account's usage state is cleared immediately and a bounded loading state is published for the new active account.
+2. The app reads the active account's saved `auth.json` snapshot from Keychain (in memory only) and asks the Codex usage client for its five-hour and weekly remaining allowance.
+3. The Codex usage client sends one authenticated GET to the usage endpoint (`/wham/usage` on `chatgpt.com/backend-api`, or `/api/codex/usage` for Codex API style hosts) with `Authorization: Bearer <access token>` and, for ChatGPT logins, `ChatGPT-Account-ID`.
+4. The response reports consumption (`used_percent`) per window; the client derives remaining allowance as `clamp(100 − used, 0, 100)` and classifies windows by their reported duration (5h ≈ 18000s, weekly ≈ 604800s), falling back to primary/secondary position.
+5. Results are published only if the request still belongs to the latest selected account; slower responses from a previous account are dropped (latest-request-wins). Repeated refreshes are skipped while a fetch is in flight or when a result is under a minute old.
+6. Failures (auth, offline, rate limiting, malformed responses) become a recoverable `Usage unavailable` state with a secret-free reason; they never block the underlying account switch.
+
+The transport, endpoint URL, and clock are injected through the `CodexHTTPTransport` protocol, the `CodexAPIClient` base layer, and the usage fetcher's `now` closure, so all network behavior is testable without live requests.
 
 ### Sync
 
@@ -51,10 +63,16 @@ The visible menu bar action for creating a new account from the current logged-i
 
 - `Sources/SwitcherooCore/SwitcherooEngine.swift`
   - Provider-agnostic orchestration (config + secure store + swapping active auth file).
+- `Sources/SwitcherooCore/UsageModels.swift`
+  - Provider-agnostic usage models and the `AccountUsageFetching` protocol.
 - `Sources/SwitcherooPresentation/SwitcherooApp.swift`
-  - Shared app state/actions (framework-free).
+  - Shared app state/actions (framework-free), including usage fetch orchestration with latest-request-wins semantics.
 - `Sources/SwitcherooCodexProvider/CodexProvider.swift`
   - Codex provider implementation (auth file path + login prep).
+- `Sources/SwitcherooCodexProvider/CodexAPIClient.swift`
+  - Reusable authenticated base layer for Codex backend APIs: request/header construction, transport protocol, credential parsing. No token refresh (planned for a later task).
+- `Sources/SwitcherooCodexProvider/CodexUsageFetcher.swift`
+  - Codex usage endpoint client: response decoding, remaining-allowance derivation, window classification.
 - `Sources/SwitcherooMacAdapters/MacConfigStore.swift`
   - macOS config persistence (`~/Library/Application Support/Switcheroo/config.json`).
 - `Sources/SwitcherooMacAdapters/MacKeychainSecureStore.swift`

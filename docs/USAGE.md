@@ -17,14 +17,25 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 
 | Control | Behavior |
 | --- | --- |
-| Refresh | Reloads config and active status from disk. |
+| Refresh | Reloads config and active status from disk, and refreshes the active account's usage if the last result is stale. |
 | Import logged-in account | Snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of duplicated. |
 | Add account | Launches the official `codex login` flow in Terminal for a new account. |
-| Switch | Makes that account's snapshot the active `~/.codex/auth.json`. |
+| Switch | Makes that account's snapshot the active `~/.codex/auth.json` and immediately loads the new account's usage. |
 | Delete | Removes the account entry and deletes the corresponding Keychain item. |
 
 > [!IMPORTANT]
 > For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
+
+## Usage Display
+
+The account dropdown shows the active account's remaining allowance under its name, for example `5h 58% · 1w 16%` (five-hour and weekly windows). Hover for reset timing. Details:
+
+- **When it loads**: on app launch and whenever the menu is opened, if the last result is older than a minute. After switching accounts it loads immediately for the newly selected account.
+- **How it is fetched**: Switcheroo reads the active account's saved `auth.json` snapshot from Keychain, derives a bearer credential in memory, and calls the Codex usage endpoint (same endpoint family the Codex CLI uses). See [Data & Security](/docs/DATA-AND-SECURITY.md).
+- **What the numbers mean**: the endpoint reports consumption as a percentage of each window. Switcheroo derives the remaining allowance (`100 − used`, clamped to 0–100) and shows that.
+- **Loading**: `Checking usage…` appears briefly while the request is in flight.
+- **Unavailable**: if the request fails (offline, sign-in expired, service busy, or an unexpected response), the row shows `Usage unavailable` with a hover hint. The account switch itself is never blocked by a usage failure.
+- **Caching**: results are kept in memory for up to one minute; requests are skipped while one is already in flight, so opening the menu repeatedly does not spam the endpoint.
 
 Background behavior:
 
