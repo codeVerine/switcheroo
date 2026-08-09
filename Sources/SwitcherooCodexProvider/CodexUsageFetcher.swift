@@ -123,7 +123,7 @@ public struct CodexUsageFetcher: AccountUsageFetching {
     /// The backend reports consumption (`used_percent`); remaining allowance is
     /// derived and clamped to 0-100 because the API never reports it directly.
     private static func mapWindow(_ window: RateLimitWindowSnapshot) -> SwitcherooUsageWindow {
-        let used = Double(window.usedPercent)
+        let used = window.usedPercent
         let remaining = max(0, min(100, 100 - used))
         let resetsAt = window.resetAt.map { Date(timeIntervalSince1970: $0) }
         return SwitcherooUsageWindow(
@@ -169,11 +169,11 @@ public struct RateLimitStatusDetails: Decodable, Sendable {
 }
 
 public struct RateLimitWindowSnapshot: Decodable, Sendable {
-    public let usedPercent: Int
+    public let usedPercent: Double
     public let limitWindowSeconds: Int?
     public let resetAt: TimeInterval?
 
-    public init(usedPercent: Int, limitWindowSeconds: Int?, resetAt: TimeInterval?) {
+    public init(usedPercent: Double, limitWindowSeconds: Int?, resetAt: TimeInterval?) {
         self.usedPercent = usedPercent
         self.limitWindowSeconds = limitWindowSeconds
         self.resetAt = resetAt
