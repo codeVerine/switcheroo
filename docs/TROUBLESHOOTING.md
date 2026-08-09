@@ -67,6 +67,28 @@ Switcheroo shows each account row's remaining five-hour and weekly allowance whe
 
 A usage failure only affects that account's row; the account itself, the other rows, and switching are unaffected, and a failure never changes or deletes your saved credentials.
 
+## “I switched accounts but Pi still acts like the old account”
+
+Switcheroo writes Pi’s `openai-codex` credential during a switch, but Pi loads its auth file once when the process starts.
+
+> [!IMPORTANT]
+> After switching accounts, restart any running Pi session. A running Pi keeps its old account in memory, and if it refreshes its own token it overwrites the synced credential with its session’s account.
+
+Try:
+
+- Quit and restart `pi` (`/logout` is not needed)
+- If Pi still shows the old account after a restart, check `~/.pi/agent/auth.json`: it should have an `openai-codex` entry. If the file was overwritten by a stale session, switch accounts again in Switcheroo.
+
+## “Switch fails with a Pi sync error”
+
+A switch updates both `~/.codex/auth.json` and `~/.pi/agent/auth.json`. If Pi’s file cannot be read, is not a valid JSON object, or the Codex snapshot cannot be converted, the switch fails as a whole and nothing is changed. This is intentional: it prevents the two files from drifting apart.
+
+Fixes to try:
+
+1. Check the error message for the offending path (token contents never appear).
+2. If `~/.pi/agent/auth.json` was hand-edited or truncated, repair it or remove it - Switcheroo recreates it with user-only permissions on the next switch.
+3. If the error mentions a rollback failure, one of the auth files could not be restored to its previous state; fix or remove the affected file and switch again.
+
 ## Reset Switcheroo
 
 1. Quit Switcheroo.

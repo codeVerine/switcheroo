@@ -81,6 +81,11 @@ final class InMemoryFileIO: SwitcherooFileIO {
     var files: [String: Data] = [:]
     private(set) var readPaths: [String] = []
     private(set) var writes: [(path: String, data: Data, permissions: Int?)] = []
+    private(set) var removedPaths: [String] = []
+    var failWritePaths: Set<String> = []
+    var failReadPaths: Set<String> = []
+    /// Called after each successful write; lets tests simulate concurrent writers.
+    var onWriteToPath: ((String) -> Void)?
 
     func fileExists(path: String) -> Bool {
         files[path] != nil
@@ -88,6 +93,9 @@ final class InMemoryFileIO: SwitcherooFileIO {
 
     func readFile(path: String) throws -> Data {
         readPaths.append(path)
+        guard !failReadPaths.contains(path) else {
+            throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "read failed for test"])
+        }
         guard let data = files[path] else {
             throw SwitcherooError.missingAuthFile(path: path)
         }
@@ -95,8 +103,17 @@ final class InMemoryFileIO: SwitcherooFileIO {
     }
 
     func writeFileAtomically(_ data: Data, path: String, permissions: Int?) throws {
+        guard !failWritePaths.contains(path) else {
+            throw NSError(domain: "TestSupport", code: 2, userInfo: [NSLocalizedDescriptionKey: "write failed for test"])
+        }
         files[path] = data
         writes.append((path: path, data: data, permissions: permissions))
+        onWriteToPath?(path)
+    }
+
+    func removeItem(path: String) throws {
+        files.removeValue(forKey: path)
+        removedPaths.append(path)
     }
 }
 
@@ -426,30 +443,85 @@ final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
     }
 }
 
+/// Auth-target adapter test double. Uses the default destination-document merge
+/// implementation so tests exercise the shared contract behavior.
+final class StubAuthTargetAdapter: @unchecked Sendable, AuthTargetAdapter {
+    let id: String
+    let displayName: String
+    let destinationAuthFilePath: String
+    let destinationKey: String
+    let convertedValue: AuthTargetJSON
+
+    var conversionError: Error?
+    var mergeError: Error?
+    private(set) var conversionCalls = 0
+    private(set) var mergeCalls = 0
+
+    init(
+        id: String = "stub-target",
+        displayName: String = "Stub Target",
+        destinationAuthFilePath: String = "~/.stub-target/auth.json",
+        destinationKey: String = "stub-credential",
+        convertedValue: AuthTargetJSON = .object(["marker": .string("stub")])
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.destinationAuthFilePath = destinationAuthFilePath
+        self.destinationKey = destinationKey
+        self.convertedValue = convertedValue
+    }
+
+    func convertedCredential(fromSourceAuthData sourceAuthData: Data) throws -> AuthTargetCredential {
+        conversionCalls += 1
+        if let conversionError {
+            throw conversionError
+        }
+        return AuthTargetCredential(destinationKey: destinationKey, jsonValue: convertedValue)
+    }
+
+    func destinationDocument(byMerging credential: AuthTargetCredential, existingDestinationData: Data?) throws -> Data {
+        mergeCalls += 1
+        if let mergeError {
+            throw mergeError
+        }
+        return try AuthTargetDocument.merging(
+            credential,
+            into: existingDestinationData,
+            targetId: id,
+            destinationPath: destinationAuthFilePath
+        )
+    }
+}
+}
+
 struct EngineHarness {
     let configStore: InMemoryConfigStore
     let secureStore: InMemorySecureStore
     let fileIO: InMemoryFileIO
     let paths: InMemoryPaths
     let provider: StubProvider
+    let authTargetAdapters: [any AuthTargetAdapter]
     let engine: SwitcherooEngine
 
     init(
         config: SwitcherooConfig = SwitcherooConfig(),
         provider: StubProvider = StubProvider(),
-        rootPath: String = "/tmp/switcheroo-tests"
+        rootPath: String = "/tmp/switcheroo-tests",
+        authTargetAdapters: [any AuthTargetAdapter] = []
     ) throws {
         self.configStore = InMemoryConfigStore(config: config)
         self.secureStore = InMemorySecureStore()
         self.fileIO = InMemoryFileIO()
         self.paths = InMemoryPaths(rootPath: rootPath)
         self.provider = provider
+        self.authTargetAdapters = authTargetAdapters
         self.engine = try SwitcherooEngine(
             configStore: configStore,
             secureStore: secureStore,
             fileIO: fileIO,
             paths: paths,
-            providers: [provider]
+            providers: [provider],
+            authTargetAdapters: authTargetAdapters
         )
     }
 
@@ -507,10 +579,32 @@ func makeAuthData(
     return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
 }
 
-func makeCodexAuthData(accessToken: String = "test-access-token", accountId: String? = "acct-1") throws -> Data {
-    var tokens: [String: Any] = ["access_token": accessToken]
+/// Codex-style auth.json with the OAuth fields auth-target adapters consume:
+/// a JWT access token with `exp` and the `chatgpt_account_id` claim, a refresh
+/// token, and an id_token carrying the same account claim. `accountId` matches
+/// the usage-fetching fixture shape; `tokensAccountId` overrides it for
+/// auth-target fixtures.
+func makeCodexAuthData(
+    accessToken: String? = nil,
+    accountId: String? = nil,
+    refreshToken: String? = nil,
+    idToken: String? = nil,
+    tokensAccountId: String? = nil
+) throws -> Data {
+    var tokens: [String: Any] = [:]
+    tokens["access_token"] = accessToken ?? makeJWT(payload: [
+        "exp": 1_700_000_000,
+        "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+    ])
+    tokens["refresh_token"] = refreshToken ?? "test-refresh-token"
+    tokens["id_token"] = idToken ?? makeJWT(payload: [
+        "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+    ])
     if let accountId {
         tokens["account_id"] = accountId
+    }
+    if let tokensAccountId {
+        tokens["account_id"] = tokensAccountId
     }
     return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
 }

@@ -26,7 +26,7 @@ let package = Package(
         ),
         .target(
             name: "SwitcherooDefaultApp",
-            dependencies: ["SwitcherooPresentation", "SwitcherooCodexProvider", "SwitcherooMacAdapters"]
+            dependencies: ["SwitcherooPresentation", "SwitcherooCodexProvider", "SwitcherooMacAdapters", "SwitcherooPiAdapter"]
         ),
         .target(
             name: "SwitcherooCLI",
@@ -34,6 +34,10 @@ let package = Package(
         ),
         .target(
             name: "SwitcherooCodexProvider",
+            dependencies: ["SwitcherooCore"]
+        ),
+        .target(
+            name: "SwitcherooPiAdapter",
             dependencies: ["SwitcherooCore"]
         ),
         .target(
@@ -57,6 +61,7 @@ let package = Package(
                 "SwitcherooDefaultApp",
                 "SwitcherooMenuBar",
                 "SwitcherooMacAdapters",
+                "SwitcherooPiAdapter",
                 "SwitcherooPresentation",
             ]
         ),

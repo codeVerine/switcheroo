@@ -8,6 +8,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
     private let fileIO: SwitcherooFileIO
     private let paths: SwitcherooPaths
     private let providers: [String: any AgentProvider]
+    private let authTargetAdapters: [any AuthTargetAdapter]
 
     private var config: SwitcherooConfig
 
@@ -16,12 +17,14 @@ public final class SwitcherooEngine: @unchecked Sendable {
         secureStore: SwitcherooSecureStoring,
         fileIO: SwitcherooFileIO,
         paths: SwitcherooPaths,
-        providers: [any AgentProvider]
+        providers: [any AgentProvider],
+        authTargetAdapters: [any AuthTargetAdapter] = []
     ) throws {
         self.configStore = configStore
         self.secureStore = secureStore
         self.fileIO = fileIO
         self.paths = paths
+        self.authTargetAdapters = authTargetAdapters
 
         var map: [String: any AgentProvider] = [:]
         for provider in providers {
@@ -229,6 +232,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let provider = try requireProvider(pid)
 
         var next = withConfig { $0 }
+        let previousConfig = next
         var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
 
         guard let target = resolveAccount(in: providerState, idOrName: accountIdOrName) else {
@@ -236,9 +240,16 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
 
         let data = try secureStore.load(key: secureStoreKey(providerId: provider.id, accountId: target.id))
+        let authFilePath = activeAuthFilePath(providerState: providerState, provider: provider)
+
+        // Convert and merge for every auth target up front so an unsupported or
+        // malformed source credential fails before any file is modified.
+        let preparedTargets = try prepareTargetDocuments(fromAuthData: data)
+        let previousAuthBytes = try? fileIO.readFile(path: authFilePath)
+
         try fileIO.writeFileAtomically(
             data,
-            path: activeAuthFilePath(providerState: providerState, provider: provider),
+            path: authFilePath,
             permissions: 0o600
         )
 
@@ -251,9 +262,30 @@ public final class SwitcherooEngine: @unchecked Sendable {
             return copy
         }
 
-        next.providers.removeAll(where: { $0.id == provider.id })
-        next.providers.append(providerState)
-        try persist(next)
+        do {
+            replaceProviderState(providerState, in: &next)
+            try persist(next)
+        } catch {
+            restoreConfig(previousConfig)
+            if !restoreFile(path: authFilePath, previous: previousAuthBytes, expectedCurrent: data) {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Account switch failed and the active auth file at \(authFilePath) could not be restored. Fix or remove it, then switch accounts again."
+                )
+            }
+            throw error
+        }
+
+        do {
+            try writeTargetDocuments(preparedTargets)
+        } catch {
+            restoreConfig(previousConfig)
+            if !restoreFile(path: authFilePath, previous: previousAuthBytes, expectedCurrent: data) {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Account switch failed and the active auth file at \(authFilePath) could not be restored. Fix or remove it, then switch accounts again."
+                )
+            }
+            throw error
+        }
     }
 
     public func deleteAccount(providerId: String? = nil, accountIdOrName: String) throws {
@@ -367,16 +399,22 @@ public final class SwitcherooEngine: @unchecked Sendable {
         writeActiveAuthFileWhenActivated: Bool
     ) throws -> SwitcherooAccountWriteResult {
         let identityKey = authIdentityKey(from: authData)
-        var next = withConfig { $0 }
+        let previousConfig = withConfig { $0 }
+        var next = previousConfig
         if next.defaultProviderId == nil {
             next.defaultProviderId = provider.id
         }
 
         var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
         let activeAuthPath = activeAuthFilePath(providerState: providerState, provider: provider)
+        let willWriteActiveFile = writeActiveAuthFileWhenActivated
+            && (activate || activateIfFirst && !hasActiveAccount(providerState))
+        let preparedTargets = willWriteActiveFile ? try prepareTargetDocuments(fromAuthData: authData) : nil
 
         if let existing = matchingAccount(identityKey: identityKey, providerId: provider.id, providerState: &providerState) {
-            try secureStore.store(authData, key: secureStoreKey(providerId: provider.id, accountId: existing.id))
+            let key = secureStoreKey(providerId: provider.id, accountId: existing.id)
+            let previousStoredData = try? secureStore.load(key: key)
+            try secureStore.store(authData, key: key)
 
             let shouldActivate = activate || activateIfFirst && !hasActiveAccount(providerState)
             var affected: SwitcherooAccount?
@@ -394,8 +432,21 @@ public final class SwitcherooEngine: @unchecked Sendable {
 
             if shouldActivate {
                 providerState.activeAccountId = existing.id
-                if writeActiveAuthFileWhenActivated {
-                    try fileIO.writeFileAtomically(authData, path: activeAuthPath, permissions: 0o600)
+                if willWriteActiveFile, let preparedTargets {
+                    try commitActivatedWrite(
+                        authData: authData,
+                        activeAuthPath: activeAuthPath,
+                        providerState: providerState,
+                        config: &next,
+                        previousConfig: previousConfig,
+                        keychainRollback: {
+                            if let previousStoredData {
+                                try? self.secureStore.store(previousStoredData, key: key)
+                            }
+                        },
+                        preparedTargets: preparedTargets
+                    )
+                    return SwitcherooAccountWriteResult(disposition: .updatedExisting, account: affected ?? existing)
                 }
             }
 
@@ -412,19 +463,75 @@ public final class SwitcherooEngine: @unchecked Sendable {
         var account = SwitcherooAccount(id: newAccountId, name: newAccountName, identityKey: identityKey)
         account.lastUsedAt = shouldActivate ? Date() : nil
 
-        try secureStore.store(authData, key: secureStoreKey(providerId: provider.id, accountId: account.id))
+        let key = secureStoreKey(providerId: provider.id, accountId: account.id)
+        try secureStore.store(authData, key: key)
         providerState.accounts.append(account)
 
         if shouldActivate {
             providerState.activeAccountId = account.id
-            if writeActiveAuthFileWhenActivated {
-                try fileIO.writeFileAtomically(authData, path: activeAuthPath, permissions: 0o600)
+            if willWriteActiveFile, let preparedTargets {
+                try commitActivatedWrite(
+                    authData: authData,
+                    activeAuthPath: activeAuthPath,
+                    providerState: providerState,
+                    config: &next,
+                    previousConfig: previousConfig,
+                    keychainRollback: {
+                        try? self.secureStore.delete(key: key)
+                    },
+                    preparedTargets: preparedTargets
+                )
+                return SwitcherooAccountWriteResult(disposition: .created, account: account)
             }
         }
 
         replaceProviderState(providerState, in: &next)
         try persist(next)
         return SwitcherooAccountWriteResult(disposition: .created, account: account)
+    }
+
+    /// Commit an activation that rewrites the active auth file: atomically write the
+    /// active file, persist the mutated config, then write the prepared target documents.
+    /// On any failure the operation is undone (active auth file, config, and keychain)
+    /// before the error propagates, so both files stay in sync with the pre-switch state.
+    private func commitActivatedWrite(
+        authData: Data,
+        activeAuthPath: String,
+        providerState: SwitcherooProvider,
+        config: inout SwitcherooConfig,
+        previousConfig: SwitcherooConfig,
+        keychainRollback: () -> Void,
+        preparedTargets: [(adapter: any AuthTargetAdapter, destinationData: Data)]
+    ) throws {
+        let previousAuthBytes = try? fileIO.readFile(path: activeAuthPath)
+        try fileIO.writeFileAtomically(authData, path: activeAuthPath, permissions: 0o600)
+
+        do {
+            replaceProviderState(providerState, in: &config)
+            try persist(config)
+        } catch {
+            keychainRollback()
+            restoreConfig(previousConfig)
+            if !restoreFile(path: activeAuthPath, previous: previousAuthBytes, expectedCurrent: authData) {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Account switch failed and the active auth file at \(activeAuthPath) could not be restored. Fix or remove it, then switch accounts again."
+                )
+            }
+            throw error
+        }
+
+        do {
+            try writeTargetDocuments(preparedTargets)
+        } catch {
+            keychainRollback()
+            restoreConfig(previousConfig)
+            if !restoreFile(path: activeAuthPath, previous: previousAuthBytes, expectedCurrent: authData) {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Account switch failed and the active auth file at \(activeAuthPath) could not be restored. Fix or remove it, then switch accounts again."
+                )
+            }
+            throw error
+        }
     }
 
     private func matchingAccount(
@@ -580,5 +687,116 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let snap = config
         lock.unlock()
         return body(snap)
+    }
+
+    // MARK: - Auth target synchronization
+
+    /// Convert and merge the active Codex credential for every configured auth target.
+    /// Performs no writes, so conversion/merge failures leave every file untouched.
+    private func prepareTargetDocuments(fromAuthData authData: Data) throws -> [(adapter: any AuthTargetAdapter, destinationData: Data)] {
+        guard !authTargetAdapters.isEmpty else { return [] }
+
+        var prepared: [(adapter: any AuthTargetAdapter, destinationData: Data)] = []
+        for adapter in authTargetAdapters {
+            let credential = try adapter.convertedCredential(fromSourceAuthData: authData)
+
+            let existing: Data?
+            if fileIO.fileExists(path: adapter.destinationAuthFilePath) {
+                do {
+                    existing = try fileIO.readFile(path: adapter.destinationAuthFilePath)
+                } catch {
+                    throw AuthTargetSyncError.destinationReadFailed(
+                        targetId: adapter.id,
+                        path: adapter.destinationAuthFilePath,
+                        reason: error.localizedDescription
+                    )
+                }
+            } else {
+                existing = nil
+            }
+
+            let destinationData = try adapter.destinationDocument(byMerging: credential, existingDestinationData: existing)
+            prepared.append((adapter: adapter, destinationData: destinationData))
+        }
+        return prepared
+    }
+
+    /// Write prepared target documents atomically with user-only permissions.
+    /// If a write fails, previously written targets are restored before the error
+    /// propagates; targets that cannot be restored are named in a rollback error.
+    private func writeTargetDocuments(_ prepared: [(adapter: any AuthTargetAdapter, destinationData: Data)]) throws {
+        guard !authTargetAdapters.isEmpty else { return }
+
+        var written: [(adapter: any AuthTargetAdapter, previous: Data?, writtenData: Data)] = []
+        for item in prepared {
+            let previous = fileIO.fileExists(path: item.adapter.destinationAuthFilePath)
+                ? try? fileIO.readFile(path: item.adapter.destinationAuthFilePath)
+                : nil
+
+            do {
+                try fileIO.writeFileAtomically(item.destinationData, path: item.adapter.destinationAuthFilePath, permissions: 0o600)
+            } catch {
+                let unrecoverable = restoreTargetFiles(written)
+                if unrecoverable.isEmpty {
+                    throw AuthTargetSyncError.destinationWriteFailed(
+                        targetId: item.adapter.id,
+                        path: item.adapter.destinationAuthFilePath,
+                        reason: error.localizedDescription
+                    )
+                }
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Account switch failed; these auth files could not be restored: \(unrecoverable.joined(separator: ", ")). Fix or remove them, then switch accounts again."
+                )
+            }
+
+            written.append((adapter: item.adapter, previous: previous, writtenData: item.destinationData))
+        }
+    }
+
+    /// Restore previously written target files to their pre-write state. Returns the
+    /// paths that could not be restored (for example, because another process
+    /// modified the file after our write).
+    private func restoreTargetFiles(_ written: [(adapter: any AuthTargetAdapter, previous: Data?, writtenData: Data)]) -> [String] {
+        var unrecoverable: [String] = []
+        for entry in written.reversed() {
+            if !restoreFile(
+                path: entry.adapter.destinationAuthFilePath,
+                previous: entry.previous,
+                expectedCurrent: entry.writtenData
+            ) {
+                unrecoverable.append(entry.adapter.destinationAuthFilePath)
+            }
+        }
+        return unrecoverable
+    }
+
+    /// Restore `path` to `previous` (or remove it when it did not exist), but only if
+    /// the file still contains `expectedCurrent` - that is, only if no other process
+    /// modified the file after our own write. Returns false when the restore cannot
+    /// be completed safely.
+    private func restoreFile(path: String, previous: Data?, expectedCurrent: Data) -> Bool {
+        guard fileIO.fileExists(path: path) else {
+            return previous == nil
+        }
+        guard let current = try? fileIO.readFile(path: path), current == expectedCurrent else {
+            return false
+        }
+        do {
+            if let previous {
+                try fileIO.writeFileAtomically(previous, path: path, permissions: 0o600)
+            } else {
+                try fileIO.removeItem(path: path)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func restoreConfig(_ config: SwitcherooConfig) {
+        lock.lock()
+        self.config = config
+        lock.unlock()
+        try? configStore.save(config)
     }
 }

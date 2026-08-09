@@ -7,6 +7,7 @@ This is a SwiftPM package with layered targets:
 - `SwitcherooCore`
 - `SwitcherooPresentation`
 - `SwitcherooCodexProvider`
+- `SwitcherooPiAdapter`
 - `SwitcherooMacAdapters`
 - `SwitcherooDefaultApp`
 - `switcheroo`

@@ -51,6 +51,29 @@ Active Codex auth file:
 - Default: `~/.codex/auth.json`
 - Switcheroo overwrites this file atomically when you switch accounts.
 
+Pi auth file (auth-target sync):
+
+- Default: `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json` when set, matching Pi’s own resolution)
+- When you switch accounts, Switcheroo updates the `openai-codex` entry from the active Codex snapshot and leaves every other provider entry untouched.
+- The file (and its parent directory) is created when absent, and is written atomically with user-only permissions (`0o600`, matching Pi’s own writes).
+
+## Pi Synchronization
+
+When you switch accounts, Switcheroo converts the selected account’s Codex snapshot into Pi’s `openai-codex` OAuth credential (access token, refresh token, expiry, and account id) and merges it into Pi’s auth file. The conversion is local and in-memory: Switcheroo does not persist parsed credential fields anywhere, and inactive account snapshots stay opaque blobs in Keychain.
+
+What this means for Pi:
+
+- No second `/logout` and `/login` flow is needed: after a switch, a freshly started Pi session authenticates as the same account Codex is using.
+- A Pi process that is already running keeps the credential it loaded at startup (Pi reads its auth file once when the process starts). Restart Pi after switching accounts.
+- If a running Pi session refreshes its own token (Pi writes the refreshed credential back), it replaces the `openai-codex` entry with its session’s account. Restart Pi promptly after switching to avoid this.
+
+Failure behavior:
+
+- If Pi’s auth file exists but cannot be read or is not a JSON object, or the Codex snapshot cannot be converted, the switch fails as a whole and reports an error; nothing is changed (this includes Codex’s own auth file). Fix or remove the broken file, then switch again.
+- Switcheroo never exposes token contents in logs, errors, or status messages.
+
+Switcheroo does not call any Pi or OpenAI APIs and never refreshes Pi credentials itself. When Pi refreshes the synced credential during normal use, that is Pi writing to its own file; Switcheroo simply preserves whatever Pi wrote, exactly like it preserves any unrelated provider entry.
+
 ## Threat Model (Plain English)
 
 Switcheroo is meant to reduce friction, not to provide stronger security than Keychain + your macOS login already provide.

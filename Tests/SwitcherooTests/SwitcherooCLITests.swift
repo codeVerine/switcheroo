@@ -206,4 +206,22 @@ final class SwitcherooCLITests: XCTestCase {
         """)
         XCTAssertEqual(errors, ["switcheroo: Missing argument: name"])
     }
+
+    func testSwitchCommandGoesThroughSharedAppLayerAndReportsSuccess() {
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [makeAccount(id: "acc-1", name: "One")]))
+        var output: [String] = []
+        var errors: [String] = []
+
+        let cli = SwitcherooCLI(
+            app: app,
+            output: { output.append($0) },
+            errorOutput: { errors.append($0) }
+        )
+
+        XCTAssertEqual(cli.run(arguments: ["switch", "acc-1"]), 0)
+
+        XCTAssertEqual(app.switchCalls, ["acc-1"])
+        XCTAssertEqual(output, ["Switched."])
+        XCTAssertTrue(errors.isEmpty)
+    }
 }

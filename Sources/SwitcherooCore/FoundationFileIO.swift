@@ -35,6 +35,13 @@ public struct FoundationFileIO: SwitcherooFileIO {
         }
     }
 
+    public func removeItem(path: String) throws {
+        let url = url(forPath: path)
+        if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+    }
+
     private func url(forPath path: String) -> URL {
         let expanded = (path as NSString).expandingTildeInPath
         return URL(fileURLWithPath: expanded)

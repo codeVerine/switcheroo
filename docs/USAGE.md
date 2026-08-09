@@ -20,7 +20,7 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 | Refresh | Reloads config and active status from disk, and refreshes every account row's usage if the last results are stale. |
 | Import logged-in account | Snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of duplicated. |
 | Add account | Launches the official `codex login` flow in Terminal for a new account. |
-| Switch | Makes that account's snapshot the active `~/.codex/auth.json` and starts one fresh usage generation covering every saved account. |
+| Switch | Makes that account's snapshot the active `~/.codex/auth.json`, synchronizes the same account into Pi's `~/.pi/agent/auth.json` (`openai-codex` entry), and starts one fresh usage generation covering every saved account. |
 | Delete | Removes the account entry and deletes the corresponding Keychain item. |
 
 > [!IMPORTANT]
@@ -36,6 +36,9 @@ Menu bar only; the CLI does not fetch or show usage. Every account row in the dr
 - **What the numbers mean**: the endpoint reports consumption as a percentage of each window. Switcheroo derives the remaining allowance (`100 − used`, clamped to 0–100) and shows that.
 - **Unavailable**: if an account's request fails (offline, sign-in expired, service busy, or an unexpected response), that row shows `Usage unavailable` with a hover hint. Other rows keep their own results - one account's failure never blocks the rest.
 - **Caching and retries**: results are kept in memory for up to one minute; a request is skipped while one is already in flight for the same account, so opening the menu repeatedly does not spam the endpoint. Failed rows wait out a short cooldown (honoring the server's `Retry-After` hint when provided) before being retried, and at most three requests run at once. No usage requests ever originate from the background auth-sync timer.
+
+> [!IMPORTANT]
+> Pi reads its auth file once when the process starts. After switching accounts, restart any running Pi session; a running session keeps its old account and may overwrite the synced credential when it refreshes its own token.
 
 Background behavior:
 
@@ -66,6 +69,7 @@ Notes:
 
 - `switcheroo add` runs `codex login` with a per-account provider home so Codex writes a fresh `auth.json` for that login. Switcheroo then imports that snapshot, refreshes an existing matching account if found, and deletes the temporary provider home directory.
 - `switcheroo sync` is best-effort; it does not “refresh” tokens itself. It only re-saves the current `auth.json` when it matches an existing Switcheroo account. It will not create accounts in the background.
+- `switcheroo switch` synchronizes the selected account into Pi’s auth file as well. If that synchronization fails (for example, `~/.pi/agent/auth.json` is malformed), the switch is rolled back and an error is printed; fix or remove the broken file, then switch again. Token contents never appear in error output.
 
 ## When To Use Switcheroo
 

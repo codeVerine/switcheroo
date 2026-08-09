@@ -1,17 +1,35 @@
 import Foundation
 
 // Switcheroo intentionally treats auth.json as an opaque blob for storage/swap.
-// For UI-only affordances (expiry display, default naming) we do best-effort parsing.
+// For UI-only affordances (expiry display, default naming) and auth-target
+// conversion we do best-effort parsing. Auth-target adapters use the summary to
+// derive identity and expiry without ever persisting parsed fields.
 
-enum CodexAuthParsing {
-    struct Summary: Sendable {
-        var accessTokenExpiry: Date?
-        var email: String?
-        var accountId: String?
-        var userId: String?
+public enum CodexAuthParsing {
+    public struct Summary: Sendable {
+        public var accessTokenExpiry: Date?
+        public var email: String?
+        public var accountId: String?
+        public var userId: String?
+        /// `chatgpt_account_id` from the id_token's `https://api.openai.com/auth` claim.
+        public var chatgptAccountId: String?
+
+        public init(
+            accessTokenExpiry: Date? = nil,
+            email: String? = nil,
+            accountId: String? = nil,
+            userId: String? = nil,
+            chatgptAccountId: String? = nil
+        ) {
+            self.accessTokenExpiry = accessTokenExpiry
+            self.email = email
+            self.accountId = accountId
+            self.userId = userId
+            self.chatgptAccountId = chatgptAccountId
+        }
     }
 
-    static func summarize(authJSONData: Data) -> Summary? {
+    public static func summarize(authJSONData: Data) -> Summary? {
         guard let doc = try? JSONDecoder().decode(CodexAuthFile.self, from: authJSONData) else {
             return nil
         }
@@ -28,8 +46,17 @@ enum CodexAuthParsing {
                 ?? jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/auth", key: "user_id")
                 ?? jwtStringClaim(token: $0, claim: "sub")
         }
+        let chatgptAccountId = doc.tokens?.id_token.flatMap {
+            jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/auth", key: "chatgpt_account_id")
+        }
 
-        return Summary(accessTokenExpiry: accessTokenExp, email: email, accountId: accountId, userId: userId)
+        return Summary(
+            accessTokenExpiry: accessTokenExp,
+            email: email,
+            accountId: accountId,
+            userId: userId,
+            chatgptAccountId: chatgptAccountId
+        )
     }
 
     private struct CodexAuthFile: Decodable {

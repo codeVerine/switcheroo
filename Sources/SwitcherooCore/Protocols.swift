@@ -20,6 +20,7 @@ public protocol SwitcherooFileIO {
     func fileExists(path: String) -> Bool
     func readFile(path: String) throws -> Data
     func writeFileAtomically(_ data: Data, path: String, permissions: Int?) throws
+    func removeItem(path: String) throws
 }
 
 public protocol SwitcherooPaths {

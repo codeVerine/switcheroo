@@ -2,6 +2,7 @@ import Foundation
 import SwitcherooCodexProvider
 import SwitcherooCore
 import SwitcherooMacAdapters
+import SwitcherooPiAdapter
 import SwitcherooPresentation
 
 public enum DefaultLoginStyle: Sendable {
@@ -32,7 +33,8 @@ public struct SwitcherooDefaultAppFactory {
             secureStore: secureStore,
             fileIO: fileIO,
             paths: paths,
-            providers: [codexProvider]
+            providers: [codexProvider],
+            authTargetAdapters: [PiAuthTargetAdapter()]
         )
 
         let providerDescriptors = [
