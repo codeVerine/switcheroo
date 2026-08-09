@@ -149,7 +149,8 @@ public final class SwitcherooEngine: @unchecked Sendable {
         )
     }
 
-    public func renameAccount(providerId: String? = nil, accountId: String, newName: String) throws {        let pid = try resolveProviderId(providerId)
+    public func renameAccount(providerId: String? = nil, accountId: String, newName: String) throws {
+        let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)
 
         var next = withConfig { $0 }

@@ -212,6 +212,24 @@ final class CodexUsageFetcherTests: XCTestCase {
         XCTAssertEqual(weekly.resetsAt, Date(timeIntervalSince1970: 1_705_000_000))
     }
 
+    func testFractionalUsedPercentDecodesWithoutError() async throws {
+        let fractional = try JSONSerialization.data(withJSONObject: [
+            "plan_type": "pro",
+            "rate_limit": [
+                "primary_window": ["used_percent": 57.5, "limit_window_seconds": 18_000],
+                "secondary_window": ["used_percent": 12.25, "limit_window_seconds": 604_800],
+            ],
+        ])
+        transport.setResponse(status: 200, body: fractional)
+
+        let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+
+        XCTAssertEqual(usage.fiveHour?.usedPercent, 57.5)
+        XCTAssertEqual(usage.fiveHour?.remainingPercent, 42.5)
+        XCTAssertEqual(usage.weekly?.usedPercent, 12.25)
+        XCTAssertEqual(usage.weekly?.remainingPercent, 87.75)
+    }
+
     func testRemainingIsDerivedFromConsumptionAndClamped() async throws {
         transport.setResponse(status: 200, body: payload(primaryUsed: 120, secondaryUsed: -5))
         let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
