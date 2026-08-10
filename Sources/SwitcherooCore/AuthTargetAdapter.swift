@@ -75,7 +75,7 @@ public extension AuthTargetAdapter {
                 if let previous, current == previous { return true }
                 guard current == expectedCurrent else { return false }
                 if let previous {
-                    try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)
+                    return try fileIO.replaceFileAtomically(previous, ifCurrentEquals: expectedCurrent, path: destinationPath, permissions: 0o600)
                 } else {
                     try fileIO.removeItem(path: destinationPath)
                 }

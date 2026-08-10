@@ -112,15 +112,17 @@ final class AuthTargetRemediationTests: XCTestCase {
         let secureStore = InMemorySecureStore()
         let fileIO = InMemoryFileIO()
         fileIO.files[activeAuthPath] = secondAuth
-        fileIO.files[piAuthPath] = Data(#"{"openai-codex": {"type": "oauth"}}"#.utf8)
+        let committedPi = Data(#"{"openai-codex": {"type": "oauth"}}"#.utf8)
+        fileIO.files[piAuthPath] = committedPi
         fileIO.files[journalPath] = try JSONEncoder().encode(TransactionJournal(
             txid: "crash-2",
             createdAt: Date(),
             configCommitted: true,
+            committedConfig: committedConfig,
             previousConfig: committedConfig,
             targets: [
                 TransactionJournal.Target(id: "codex", path: activeAuthPath, previous: firstAuth, expected: secondAuth),
-                TransactionJournal.Target(id: "pi", path: piAuthPath, previous: nil),
+                TransactionJournal.Target(id: "pi", path: piAuthPath, previous: nil, expected: committedPi),
             ],
             keychainChanges: []
         ))
@@ -289,6 +291,49 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertFalse(try JSONDecoder().decode(TransactionJournal.self, from: journalData).configCommitted)
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], firstAuth)
         XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
+    }
+
+    func testJournalResetFailureStopsRollbackAndStartupRejectsMixedCommittedState() throws {
+        let (harness, _, secondId, firstAuth, _) = try makeTwoAccountHarness(
+            authTargetAdapters: [PiAuthTargetAdapter()]
+        )
+        harness.fileIO.onWriteToPath = { path in
+            guard path == self.journalPath,
+                  let data = harness.fileIO.files[path],
+                  let journal = try? JSONDecoder().decode(TransactionJournal.self, from: data),
+                  journal.configCommitted else {
+                return
+            }
+            harness.fileIO.files[self.activeAuthPath] = firstAuth
+            harness.fileIO.failWritePaths.insert(path)
+            harness.fileIO.failAfterWriteOncePaths.insert(path)
+        }
+
+        XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: secondId)) { error in
+            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+                return XCTFail("Expected rollbackIncomplete, got \(error)")
+            }
+        }
+
+        let journalData = try XCTUnwrap(harness.fileIO.files[journalPath])
+        let journal = try JSONDecoder().decode(TransactionJournal.self, from: journalData)
+        XCTAssertTrue(journal.configCommitted)
+        XCTAssertEqual(journal.committedConfig, harness.configStore.config)
+        XCTAssertEqual(harness.fileIO.files[activeAuthPath], firstAuth)
+
+        XCTAssertThrowsError(try SwitcherooEngine(
+            configStore: harness.configStore,
+            secureStore: harness.secureStore,
+            fileIO: harness.fileIO,
+            paths: harness.paths,
+            providers: [harness.provider],
+            authTargetAdapters: harness.authTargetAdapters
+        )) { error in
+            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+                return XCTFail("Expected rollbackIncomplete, got \(error)")
+            }
+        }
+        XCTAssertTrue(harness.fileIO.itemExists(path: journalPath))
     }
 
     func testStartupReconcileRollsBackJournaledKeychainChanges() throws {

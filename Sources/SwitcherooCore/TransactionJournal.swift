@@ -52,7 +52,26 @@ struct TransactionJournal: Codable {
     var txid: String
     var createdAt: Date
     var configCommitted: Bool
+    var committedConfig: SwitcherooConfig? = nil
     var previousConfig: SwitcherooConfig
     var targets: [Target]
     var keychainChanges: [KeychainChange]
+
+    init(
+        txid: String,
+        createdAt: Date,
+        configCommitted: Bool,
+        committedConfig: SwitcherooConfig? = nil,
+        previousConfig: SwitcherooConfig,
+        targets: [Target],
+        keychainChanges: [KeychainChange]
+    ) {
+        self.txid = txid
+        self.createdAt = createdAt
+        self.configCommitted = configCommitted
+        self.committedConfig = committedConfig
+        self.previousConfig = previousConfig
+        self.targets = targets
+        self.keychainChanges = keychainChanges
+    }
 }

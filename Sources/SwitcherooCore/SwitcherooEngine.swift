@@ -964,6 +964,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 txid: UUID().uuidString,
                 createdAt: Date(),
                 configCommitted: false,
+                committedConfig: nil,
                 previousConfig: plan.previousConfig,
                 targets: preparedTargets.map {
                     TransactionJournal.Target(id: $0.adapter.id, path: $0.destinationPath, previous: $0.previous)
@@ -1003,6 +1004,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 try plan.mutateConfig(&next)
                 try persist(next)
 
+                journal.committedConfig = next
                 journal.configCommitted = true
                 try writeJournal(journal)
             } catch let error {
@@ -1010,19 +1012,19 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 // unrestored; still attempt Keychain and config rollback and
                 // aggregate every failure. The journal must survive regardless,
                 // so startup reconciliation can retry the unrestored target.
-                var journalResetFailure: String?
                 if journal.configCommitted {
                     journal.configCommitted = false
                     do {
                         try writeJournal(journal)
                     } catch {
-                        journalResetFailure = "transaction journal could not be returned to an uncommitted state"
+                        throw AuthTargetSyncError.rollbackIncomplete(
+                            message: "Account switch failed before rollback could be made recoverable. A recovery record remains at \(journalPath)."
+                        )
                     }
                 }
                 if let targetFailure = error as? TargetRollbackIncomplete {
                     let failures = targetFailure.unrestoredPaths
                         + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: plan.previousConfig)
-                        + (journalResetFailure.map { [$0] } ?? [])
                     throw AuthTargetSyncError.rollbackIncomplete(
                         message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
                     )
@@ -1032,13 +1034,12 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     appliedChanges: appliedChanges,
                     previousConfig: plan.previousConfig
                 )
-                if failures.isEmpty && journalResetFailure == nil {
+                if failures.isEmpty {
                     try? deleteJournal(txid: journal.txid)
                     throw error
                 }
-                let allFailures = failures + (journalResetFailure.map { [$0] } ?? [])
                 throw AuthTargetSyncError.rollbackIncomplete(
-                    message: "Account switch failed and could not be fully rolled back. Failed to restore: \(allFailures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
+                    message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
                 )
             }
 
@@ -1130,6 +1131,14 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
 
         if journal.configCommitted {
+            guard let committedConfig = journal.committedConfig,
+                  let currentConfig = try? configStore.load(),
+                  currentConfig == committedConfig,
+                  committedTargetsMatch(journal) else {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Recovery of the committed account switch is ambiguous. Fix or remove the affected transaction journal at \(path), then switch accounts again."
+                )
+            }
             try fileIO.removeItem(path: path)
             return
         }
@@ -1175,6 +1184,20 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 message: "Recovery of an interrupted account switch failed. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(path)."
             )
         }
+    }
+
+    private func committedTargetsMatch(_ journal: TransactionJournal) -> Bool {
+        for target in journal.targets {
+            guard target.publicationMarkerPresent,
+                  target.publicationStarted,
+                  let expected = target.expected,
+                  fileIO.fileExists(path: target.path),
+                  let current = try? fileIO.readFile(path: target.path),
+                  current == expected else {
+                return false
+            }
+        }
+        return true
     }
 
     private func restoreJournalTarget(_ target: TransactionJournal.Target) -> Bool {

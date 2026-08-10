@@ -51,6 +51,33 @@ public struct FoundationFileIO: SwitcherooFileIO {
         try fsyncDirectory(directory)
     }
 
+    public func replaceFileAtomically(_ data: Data, ifCurrentEquals expected: Data, path: String, permissions: Int?) throws -> Bool {
+        let url = url(forPath: path)
+        let directory = url.deletingLastPathComponent()
+        try ensureDirectoryChain(directory)
+
+        let tempURL = try createExclusiveTemporaryFile(in: directory)
+        defer { try? fileManager.removeItem(at: tempURL) }
+
+        let handle = try FileHandle(forWritingTo: tempURL)
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+
+        if let permissions {
+            try applyPermissions(permissions, to: tempURL.path)
+        }
+
+        guard fileManager.fileExists(atPath: url.path),
+              try Data(contentsOf: url) == expected else {
+            return false
+        }
+
+        _ = try fileManager.replaceItemAt(url, withItemAt: tempURL, backupItemName: nil, options: [.usingNewMetadataOnly])
+        try fsyncDirectory(directory)
+        return true
+    }
+
     public func removeItem(path: String) throws {
         let url = url(forPath: path)
         if fileManager.fileExists(atPath: url.path) {

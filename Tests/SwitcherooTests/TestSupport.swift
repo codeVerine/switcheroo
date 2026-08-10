@@ -173,6 +173,12 @@ final class InMemoryFileIO: SwitcherooFileIO {
         }
     }
 
+    func replaceFileAtomically(_ data: Data, ifCurrentEquals expected: Data, path: String, permissions: Int?) throws -> Bool {
+        guard files[path] == expected else { return false }
+        try writeFileAtomically(data, path: path, permissions: permissions)
+        return true
+    }
+
     func removeItem(path: String) throws {
         guard !failRemovePaths.contains(path) else {
             throw NSError(domain: "TestSupport", code: 7, userInfo: [NSLocalizedDescriptionKey: "remove failed for test"])

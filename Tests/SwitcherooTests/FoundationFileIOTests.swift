@@ -24,6 +24,25 @@ final class FoundationFileIOTests: XCTestCase {
         XCTAssertEqual(try fileIO.readFile(path: fileURL.path), secondData)
     }
 
+    func testReplaceFileAtomicallyRequiresExpectedContent() throws {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = tempRoot.appendingPathComponent("auth.json")
+        let fileIO = FoundationFileIO()
+
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let expected = Data("expected".utf8)
+        let replacement = Data("replacement".utf8)
+        try fileIO.writeFileAtomically(expected, path: fileURL.path, permissions: 0o600)
+
+        XCTAssertFalse(try fileIO.replaceFileAtomically(replacement, ifCurrentEquals: Data("other".utf8), path: fileURL.path, permissions: 0o600))
+        XCTAssertEqual(try fileIO.readFile(path: fileURL.path), expected)
+        XCTAssertTrue(try fileIO.replaceFileAtomically(replacement, ifCurrentEquals: expected, path: fileURL.path, permissions: 0o600))
+        XCTAssertEqual(try fileIO.readFile(path: fileURL.path), replacement)
+    }
+
     func testWriteCreatesFilesAndDirectoriesWithUserOnlyPermissionsUnderPermissiveUmask() throws {
         let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let fileURL = tempRoot.appendingPathComponent("agent/subdir/auth.json")

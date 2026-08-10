@@ -28,6 +28,7 @@ public protocol SwitcherooFileIO {
     /// exclusively with mode 0600, apply `permissions` (when given) before the
     /// rename, fsync file and directory, then rename over the destination.
     func writeFileAtomically(_ data: Data, path: String, permissions: Int?) throws
+    func replaceFileAtomically(_ data: Data, ifCurrentEquals expected: Data, path: String, permissions: Int?) throws -> Bool
     func removeItem(path: String) throws
     /// Create a directory; throws when it already exists (exclusive creation,
     /// used by the Pi-compatible lock protocol).
