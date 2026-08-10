@@ -265,8 +265,6 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.usageStatesByAccountId[accountId] = .loading
         }
         usageTask?.cancel()
-        lock.unlock()
-
         usageTask = Task { [weak self] in
             guard let self else { return }
             let context = await self.prepareBatchContext(
@@ -276,6 +274,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             )
             await self.fetchUsageBatch(context: context)
         }
+        lock.unlock()
     }
 
     /// Accounts that need a fetch right now: not fresh, not inside a failure
