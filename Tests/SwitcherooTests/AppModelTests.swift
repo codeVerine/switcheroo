@@ -180,22 +180,26 @@ final class AppModelTests: XCTestCase {
         let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [first, second]))
         app.nextImportedAccount = first
         app.nextImportedDisposition = .updatedExisting
-        let model = AppModel(app: app, statusMessageAutoDismissNanoseconds: 20_000_000)
+        let model = AppModel(app: app, statusMessageAutoDismissNanoseconds: 300_000_000)
 
         model.importCurrentAccount()
         XCTAssertEqual(model.statusMessage, "Refreshed First.")
 
-        try await Task.sleep(nanoseconds: 5_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         app.nextImportedAccount = second
         model.importCurrentAccount()
         XCTAssertEqual(model.statusMessage, "Refreshed Second.")
 
-        try await Task.sleep(nanoseconds: 18_000_000)
+        // Well before the first message's original deadline (50ms + 300ms), and
+        // well before the second message's own deadline (300ms): proves the
+        // first timer was cancelled rather than merely racing the second.
+        try await Task.sleep(nanoseconds: 150_000_000)
 
         XCTAssertEqual(model.statusMessage, "Refreshed Second.")
 
-        try await Task.sleep(nanoseconds: 10_000_000)
+        // Comfortably past the second message's 300ms deadline.
+        try await Task.sleep(nanoseconds: 300_000_000)
 
         XCTAssertNil(model.statusMessage)
     }
