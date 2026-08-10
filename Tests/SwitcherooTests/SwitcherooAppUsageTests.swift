@@ -574,7 +574,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
 
         // A switch starts batch B (new generation, active account first) while
         // A's three requests are still blocked. A's queued work must not start.
-        app.switchToAccount(idOrName: "acc-6")
+        try app.switchToAccount(idOrName: "acc-6")
         await waitUntil { fetcher.callAccountIds.count == 6 }
 
         let calls = fetcher.callAccountIds
