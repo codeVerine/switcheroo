@@ -28,7 +28,7 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 
 ## Usage Display
 
-Every account row in the dropdown shows that account's remaining allowance under its name, for example `5h 58% · 1w 16%` (five-hour and weekly windows). Hover for reset timing. Details:
+Menu bar only; the CLI does not fetch or show usage. Every account row in the dropdown shows that account's remaining allowance under its name, for example `5h 58% · 1w 16%` (five-hour and weekly windows). Hover for reset timing. Details:
 
 - **When it loads**: on app launch and whenever the menu is opened, if the last result is older than a minute, Switcheroo fetches usage for all saved accounts at once. Each account is queried with its own saved credential, so every row reflects its own account. Switching accounts always starts one fresh all-account batch, even when rows are still cached.
 - **Live updates**: results appear in the open dropdown as they arrive; rows briefly show `Checking usage…` and then settle into their loaded value without needing to close and reopen the menu.
