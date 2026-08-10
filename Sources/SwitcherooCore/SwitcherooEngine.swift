@@ -239,35 +239,36 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)
 
-        let next = withConfig { $0 }
-        let previousConfig = next
-        let providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+        try performTransaction {
+            let previousConfig = try loadConfigForTransaction()
+            let providerState = previousConfig.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
 
-        guard let target = resolveAccount(in: providerState, idOrName: accountIdOrName) else {
-            throw SwitcherooError.accountNotFound
-        }
-
-        let data = try secureStore.load(key: secureStoreKey(providerId: provider.id, accountId: target.id))
-
-        try performTransaction(
-            nextConfig: next,
-            previousConfig: previousConfig,
-            keychainChanges: [],
-            prepareTargets: {
-                try prepareTargetDocuments(fromAuthData: data, providerState: providerState)
+            guard let target = resolveAccount(in: providerState, idOrName: accountIdOrName) else {
+                throw SwitcherooError.accountNotFound
             }
-        ) { config in
-            config.providers.removeAll(where: { $0.id == provider.id })
-            var updated = providerState
-            updated.activeAccountId = target.id
-            updated.accounts = updated.accounts.map { acc in
-                var copy = acc
-                if copy.id == target.id {
-                    copy.lastUsedAt = Date()
+
+            let data = try secureStore.load(key: secureStoreKey(providerId: provider.id, accountId: target.id))
+            return TransactionPlan(
+                previousConfig: previousConfig,
+                nextConfig: previousConfig,
+                keychainChanges: [],
+                prepareTargets: {
+                    try self.prepareTargetDocuments(fromAuthData: data, providerState: providerState)
+                },
+                mutateConfig: { config in
+                    config.providers.removeAll(where: { $0.id == provider.id })
+                    var updated = providerState
+                    updated.activeAccountId = target.id
+                    updated.accounts = updated.accounts.map { acc in
+                        var copy = acc
+                        if copy.id == target.id {
+                            copy.lastUsedAt = Date()
+                        }
+                        return copy
+                    }
+                    config.providers.append(updated)
                 }
-                return copy
-            }
-            config.providers.append(updated)
+            )
         }
     }
 
@@ -397,7 +398,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
             // Capture the pre-image up front; a load failure aborts before any
             // mutation instead of producing an incomplete rollback pre-image.
             let previousStoredData: Data?
-            if secureStore.itemExists(key: key) {
+            if try secureStore.itemExists(key: key) {
                 previousStoredData = try secureStore.load(key: key)
             } else {
                 previousStoredData = nil
@@ -425,10 +426,10 @@ public final class SwitcherooEngine: @unchecked Sendable {
                         previousConfig: previousConfig,
                         keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: previousStoredData)],
                         prepareTargets: {
-                            try prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
+                            try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
                         }
                     ) { config in
-                        replaceProviderState(providerState, in: &config)
+                        self.replaceProviderState(providerState, in: &config)
                     }
                     return SwitcherooAccountWriteResult(disposition: .updatedExisting, account: affected ?? existing)
                 }
@@ -459,10 +460,10 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     previousConfig: previousConfig,
                     keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: nil)],
                     prepareTargets: {
-                        try prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
+                        try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
                     }
                 ) { config in
-                    replaceProviderState(providerState, in: &config)
+                    self.replaceProviderState(providerState, in: &config)
                 }
                 return SwitcherooAccountWriteResult(disposition: .created, account: account)
             }
@@ -629,6 +630,18 @@ public final class SwitcherooEngine: @unchecked Sendable {
         return body(snap)
     }
 
+    private func loadConfigForTransaction() throws -> SwitcherooConfig {
+        let current = try configStore.load()
+        lock.lock()
+        config = current
+        lock.unlock()
+        return current
+    }
+
+    private func configsMatch(_ lhs: SwitcherooConfig, _ rhs: SwitcherooConfig) -> Bool {
+        lhs == rhs
+    }
+
     // MARK: - Auth target synchronization
 
     private struct PreparedTarget {
@@ -640,6 +653,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
     }
 
     private struct WrittenTarget {
+        let adapter: any AuthTargetAdapter
         let destinationPath: String
         let previous: Data?
         let writtenData: Data
@@ -662,6 +676,36 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let op: Operation
         let key: String
         let previous: Data?
+    }
+
+    private struct TransactionPlan {
+        let previousConfig: SwitcherooConfig
+        let nextConfig: SwitcherooConfig
+        let keychainChanges: [KeychainChange]
+        let prepareTargets: () throws -> [PreparedTarget]
+        let mutateConfig: (inout SwitcherooConfig) throws -> Void
+    }
+
+    private func performTransaction(
+        nextConfig: SwitcherooConfig,
+        previousConfig: SwitcherooConfig,
+        keychainChanges: [KeychainChange],
+        prepareTargets: @escaping () throws -> [PreparedTarget],
+        mutateConfig: @escaping (inout SwitcherooConfig) throws -> Void
+    ) throws {
+        try performTransaction {
+            let persistedConfig = try configStore.load()
+            guard configsMatch(persistedConfig, previousConfig) else {
+                throw SwitcherooError.configUnavailable
+            }
+            return TransactionPlan(
+                previousConfig: previousConfig,
+                nextConfig: nextConfig,
+                keychainChanges: keychainChanges,
+                prepareTargets: prepareTargets,
+                mutateConfig: mutateConfig
+            )
+        }
     }
 
     /// Resolve and validate every target, capture pre-images, and reject
@@ -714,17 +758,27 @@ public final class SwitcherooEngine: @unchecked Sendable {
     /// Publish every prepared target through its adapter. On a write failure,
     /// previously written targets are restored (compare-and-swap guarded);
     /// targets that cannot be restored are reported by the caller.
-    private func writeTargetDocuments(_ prepared: [PreparedTarget]) throws -> [WrittenTarget] {
+    private func writeTargetDocuments(
+        _ prepared: [PreparedTarget],
+        didWrite: (Int, AuthTargetWriteResult) throws -> Void
+    ) throws -> [WrittenTarget] {
         var written: [WrittenTarget] = []
-        for item in prepared {
-            let writtenBytes: Data
+        for (index, item) in prepared.enumerated() {
+            let result: AuthTargetWriteResult
             do {
-                writtenBytes = try item.adapter.writeDestination(
+                result = try item.adapter.writeDestination(
                     credential: item.credential,
                     sourceAuthData: item.sourceAuthData,
                     destinationPath: item.destinationPath,
                     fileIO: fileIO
                 )
+                written.append(WrittenTarget(
+                    adapter: item.adapter,
+                    destinationPath: item.destinationPath,
+                    previous: result.previousData,
+                    writtenData: result.writtenData
+                ))
+                try didWrite(index, result)
             } catch {
                 let unrecoverable = restoreTargetFiles(written)
                 if !unrecoverable.isEmpty {
@@ -736,7 +790,6 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     reason: error.localizedDescription
                 )
             }
-            written.append(WrittenTarget(destinationPath: item.destinationPath, previous: item.previous, writtenData: writtenBytes))
         }
         return written
     }
@@ -747,34 +800,16 @@ public final class SwitcherooEngine: @unchecked Sendable {
     private func restoreTargetFiles(_ written: [WrittenTarget]) -> [String] {
         var unrecoverable: [String] = []
         for entry in written.reversed() {
-            if !restoreFile(path: entry.destinationPath, previous: entry.previous, expectedCurrent: entry.writtenData) {
+            if !entry.adapter.restoreDestination(
+                previous: entry.previous,
+                expectedCurrent: entry.writtenData,
+                destinationPath: entry.destinationPath,
+                fileIO: fileIO
+            ) {
                 unrecoverable.append(entry.destinationPath)
             }
         }
         return unrecoverable
-    }
-
-    /// Restore `path` to `previous` (or remove it when it did not exist), but
-    /// only if the file still contains `expectedCurrent` - that is, only if no
-    /// other process modified the file after our own write. Returns false when
-    /// the restore cannot be completed safely.
-    private func restoreFile(path: String, previous: Data?, expectedCurrent: Data) -> Bool {
-        guard fileIO.fileExists(path: path) else {
-            return previous == nil
-        }
-        guard let current = try? fileIO.readFile(path: path), current == expectedCurrent else {
-            return false
-        }
-        do {
-            if let previous {
-                try fileIO.writeFileAtomically(previous, path: path, permissions: 0o600)
-            } else {
-                try fileIO.removeItem(path: path)
-            }
-            return true
-        } catch {
-            return false
-        }
     }
 
     private func applyKeychainChange(_ change: KeychainChange) throws {
@@ -835,24 +870,23 @@ public final class SwitcherooEngine: @unchecked Sendable {
     /// mutation; a rollback that itself fails leaves the journal in place for
     /// startup reconciliation and reports every failed recovery step.
     private func performTransaction(
-        nextConfig: SwitcherooConfig,
-        previousConfig: SwitcherooConfig,
-        keychainChanges: [KeychainChange],
-        prepareTargets: () throws -> [PreparedTarget],
-        mutateConfig: (inout SwitcherooConfig) throws -> Void
+        buildPlan: () throws -> TransactionPlan
     ) throws {
         try fileIO.withExclusiveLock(path: transactionLockPath()) {
             try reconcilePendingTransactionsLocked()
 
-            let preparedTargets = try prepareTargets()
+            let plan = try buildPlan()
+            let preparedTargets = try plan.prepareTargets()
 
             var journal = TransactionJournal(
                 txid: UUID().uuidString,
                 createdAt: Date(),
                 configCommitted: false,
-                previousConfig: previousConfig,
-                targets: preparedTargets.map { TransactionJournal.Target(path: $0.destinationPath, previous: $0.previous) },
-                keychainChanges: keychainChanges.map { change in
+                previousConfig: plan.previousConfig,
+                targets: preparedTargets.map {
+                    TransactionJournal.Target(id: $0.adapter.id, path: $0.destinationPath, previous: $0.previous)
+                },
+                keychainChanges: plan.keychainChanges.map { change in
                     let opName: String
                     switch change.op {
                     case .store: opName = "store"
@@ -862,7 +896,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 }
             )
 
-            var next = nextConfig
+            var next = plan.nextConfig
             var writtenTargets: [WrittenTarget] = []
             var appliedChanges: [KeychainChange] = []
             let journalPath = try transactionJournalPath()
@@ -870,19 +904,22 @@ public final class SwitcherooEngine: @unchecked Sendable {
             do {
                 try writeJournal(journal)
 
-                for change in keychainChanges {
+                for change in plan.keychainChanges {
                     try applyKeychainChange(change)
                     appliedChanges.append(change)
                 }
 
-                writtenTargets = try writeTargetDocuments(preparedTargets)
+                writtenTargets = try writeTargetDocuments(preparedTargets) { index, result in
+                    journal.targets[index].previous = result.previousData
+                    journal.targets[index].expected = result.writtenData
+                    try writeJournal(journal)
+                }
 
-                try mutateConfig(&next)
+                try plan.mutateConfig(&next)
                 try persist(next)
 
                 journal.configCommitted = true
                 try writeJournal(journal)
-                try deleteJournal(txid: journal.txid)
             } catch let error {
                 // A target-level rollback failure already left some destination
                 // unrestored; still attempt Keychain and config rollback and
@@ -890,7 +927,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 // so startup reconciliation can retry the unrestored target.
                 if let targetFailure = error as? TargetRollbackIncomplete {
                     let failures = targetFailure.unrestoredPaths
-                        + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: previousConfig)
+                        + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: plan.previousConfig)
                     throw AuthTargetSyncError.rollbackIncomplete(
                         message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
                     )
@@ -898,7 +935,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 let failures = rollbackEverything(
                     writtenTargets: writtenTargets,
                     appliedChanges: appliedChanges,
-                    previousConfig: previousConfig
+                    previousConfig: plan.previousConfig
                 )
                 if failures.isEmpty {
                     try? deleteJournal(txid: journal.txid)
@@ -908,6 +945,8 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
                 )
             }
+
+            try? deleteJournal(txid: journal.txid)
         }
     }
 
@@ -1004,25 +1043,22 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
     }
 
-    /// Restore a journaled target to its pre-transaction bytes, skipping the
-    /// restore when the file already holds them. Runs under the transaction
-    /// lock, so no other Switcheroo transaction can race it.
     private func restoreJournalTarget(_ target: TransactionJournal.Target) -> Bool {
-        guard fileIO.fileExists(path: target.path) else {
-            return target.previous == nil
-        }
-        guard let current = try? fileIO.readFile(path: target.path) else { return false }
-        if current == target.previous { return true }
-        do {
-            if let previous = target.previous {
-                try fileIO.writeFileAtomically(previous, path: target.path, permissions: 0o600)
-            } else {
-                try fileIO.removeItem(path: target.path)
-            }
-            return true
-        } catch {
-            return false
-        }
+        guard let expected = target.expected else { return true }
+        let providerStates = withConfig { $0.providers }
+        let adapter = authTargetAdapters.first(where: { $0.id == target.id })
+            ?? authTargetAdapters.first(where: { adapter in
+                providerStates.contains { providerState in
+                    fileIO.canonicalDestinationPath(adapter.destinationAuthFilePath(forProviderState: providerState)) == target.path
+                }
+            })
+        guard let adapter else { return false }
+        return adapter.restoreDestination(
+            previous: target.previous,
+            expectedCurrent: expected,
+            destinationPath: target.path,
+            fileIO: fileIO
+        )
     }
 
     private func rollbackJournalKeychainChange(_ change: TransactionJournal.KeychainChange) throws {

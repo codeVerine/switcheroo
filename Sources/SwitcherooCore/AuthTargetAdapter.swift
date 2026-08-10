@@ -37,8 +37,42 @@ public protocol AuthTargetAdapter: Sendable {
     /// Whole-file targets replace the destination (skipping the write when it
     /// already holds exactly the source bytes); section targets re-read under
     /// their own lock and merge only their section, preserving every unrelated
-    /// top-level entry. Returns the bytes actually written.
-    func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data
+    /// top-level entry. Returns the lock-time pre-image and the bytes actually
+    /// written.
+    func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult
+
+    func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool
+}
+
+public struct AuthTargetWriteResult: Sendable {
+    public let previousData: Data?
+    public let writtenData: Data
+
+    public init(previousData: Data?, writtenData: Data) {
+        self.previousData = previousData
+        self.writtenData = writtenData
+    }
+}
+
+public extension AuthTargetAdapter {
+    func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool {
+        guard fileIO.fileExists(path: destinationPath) else {
+            return previous == nil
+        }
+        guard let current = try? fileIO.readFile(path: destinationPath), current == expectedCurrent else {
+            return false
+        }
+        do {
+            if let previous {
+                try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)
+            } else {
+                try fileIO.removeItem(path: destinationPath)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
 }
 
 /// A converted credential destined for one top-level key of the target auth document.

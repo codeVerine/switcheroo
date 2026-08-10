@@ -104,6 +104,29 @@ final class AuthTargetSyncTests: XCTestCase {
         XCTAssertEqual(fresh["new"] as? Bool, true)
     }
 
+    func testRollbackRestoresPiLockTimePreImage() throws {
+        let failing = StubAuthTargetAdapter(
+            id: "failing-target",
+            defaultDestinationAuthFilePath: "~/.failing-target/auth.json"
+        )
+        failing.documentError = NSError(domain: "AuthTargetSyncTests", code: 1)
+        let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
+            authTargetAdapters: [PiAuthTargetAdapter(), failing]
+        )
+        let preparedPi = Data(#"{"opencode-go": {"type": "api_key"}}"#.utf8)
+        let concurrentPi = Data(#"{"opencode-go": {"type": "api_key"}, "fresh-provider": {"new": true}}"#.utf8)
+        harness.fileIO.files[piAuthPath] = preparedPi
+        harness.fileIO.onWriteToPath = { path in
+            if path == self.activeAuthPath {
+                harness.fileIO.files[self.piAuthPath] = concurrentPi
+            }
+        }
+
+        XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: secondId))
+
+        XCTAssertEqual(harness.fileIO.files[piAuthPath], concurrentPi)
+    }
+
     func testCodexReplacementAndPiSectionUpsertSemanticsRemainDistinct() throws {
         // A replace-mode target overwrites the whole file; a section target
         // preserves unrelated entries. Both run through the same orchestration.

@@ -68,8 +68,8 @@ final class AuthTargetRemediationTests: XCTestCase {
             configCommitted: false,
             previousConfig: previousConfig,
             targets: [
-                TransactionJournal.Target(path: activeAuthPath, previous: firstAuth),
-                TransactionJournal.Target(path: piAuthPath, previous: nil),
+                TransactionJournal.Target(id: "codex", path: activeAuthPath, previous: firstAuth, expected: secondAuth),
+                TransactionJournal.Target(id: "pi", path: piAuthPath, previous: nil),
             ],
             keychainChanges: []
         ))
@@ -119,8 +119,8 @@ final class AuthTargetRemediationTests: XCTestCase {
             configCommitted: true,
             previousConfig: committedConfig,
             targets: [
-                TransactionJournal.Target(path: activeAuthPath, previous: firstAuth),
-                TransactionJournal.Target(path: piAuthPath, previous: nil),
+                TransactionJournal.Target(id: "codex", path: activeAuthPath, previous: firstAuth, expected: secondAuth),
+                TransactionJournal.Target(id: "pi", path: piAuthPath, previous: nil),
             ],
             keychainChanges: []
         ))
@@ -137,6 +137,52 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertEqual(fileIO.files[activeAuthPath], secondAuth)
         XCTAssertEqual(configStore.config.providers.first?.activeAccountId, second.id)
         XCTAssertFalse(fileIO.itemExists(path: journalPath))
+    }
+
+    func testStartupDoesNotOverwritePiChangesAfterInterruptedPublication() throws {
+        let firstAuth = try makeCodexAuthData(refreshToken: "first")
+        let publishedAuth = try makeCodexAuthData(refreshToken: "published")
+        let previousConfig = SwitcherooConfig()
+        let configStore = InMemoryConfigStore(config: previousConfig)
+        let secureStore = InMemorySecureStore()
+        let fileIO = InMemoryFileIO()
+        let concurrentPi = Data(#"{"openai-codex": {"refresh": "concurrent"}}"#.utf8)
+        fileIO.files[piAuthPath] = concurrentPi
+        fileIO.files[journalPath] = try JSONEncoder().encode(TransactionJournal(
+            txid: "crash-pi-race",
+            createdAt: Date(),
+            configCommitted: false,
+            previousConfig: previousConfig,
+            targets: [
+                TransactionJournal.Target(id: "pi", path: piAuthPath, previous: firstAuth, expected: publishedAuth),
+            ],
+            keychainChanges: []
+        ))
+
+        XCTAssertThrowsError(try SwitcherooEngine(
+            configStore: configStore,
+            secureStore: secureStore,
+            fileIO: fileIO,
+            paths: InMemoryPaths(),
+            providers: [StubProvider()],
+            authTargetAdapters: [PiAuthTargetAdapter()]
+        ))
+
+        XCTAssertEqual(fileIO.files[piAuthPath], concurrentPi)
+        XCTAssertTrue(fileIO.itemExists(path: journalPath))
+    }
+
+    func testCommittedJournalCleanupFailureDoesNotTriggerRollback() throws {
+        let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
+            authTargetAdapters: [PiAuthTargetAdapter()]
+        )
+        harness.fileIO.failRemovePaths.insert(journalPath)
+
+        try harness.engine.switchToAccount(accountIdOrName: secondId)
+
+        XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, secondId)
+        let journalData = try XCTUnwrap(harness.fileIO.files[journalPath])
+        XCTAssertTrue(try JSONDecoder().decode(TransactionJournal.self, from: journalData).configCommitted)
     }
 
     func testStartupReconcileRollsBackJournaledKeychainChanges() throws {
@@ -201,7 +247,7 @@ final class AuthTargetRemediationTests: XCTestCase {
             createdAt: Date(),
             configCommitted: false,
             previousConfig: harness.configStore.config,
-            targets: [TransactionJournal.Target(path: activeAuthPath, previous: firstAuth)],
+            targets: [TransactionJournal.Target(id: "codex", path: activeAuthPath, previous: firstAuth, expected: firstAuth)],
             keychainChanges: []
         ))
 

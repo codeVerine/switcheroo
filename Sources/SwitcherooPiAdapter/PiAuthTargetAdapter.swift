@@ -80,7 +80,7 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         _ = try parseDocument(existingDestinationData, destinationPath: destinationPath)
     }
 
-    public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data {
+    public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult {
         guard let credential else {
             throw AuthTargetSyncError.unsupportedSource(targetId: id, reason: "missing converted credential")
         }
@@ -100,7 +100,31 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
 
         let merged = try AuthTargetDocument.merging(credential, into: existing, targetId: id, destinationPath: destinationPath)
         try fileIO.writeFileAtomically(merged, path: destinationPath, permissions: 0o600)
-        return merged
+        return AuthTargetWriteResult(previousData: existing, writtenData: merged)
+    }
+
+    public func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool {
+        guard let lock = try? PiAuthFileLock.acquire(path: destinationPath, fileIO: fileIO) else {
+            return false
+        }
+        defer { lock.release() }
+
+        guard fileIO.fileExists(path: destinationPath) else {
+            return previous == nil
+        }
+        guard let current = try? fileIO.readFile(path: destinationPath), current == expectedCurrent else {
+            return false
+        }
+        do {
+            if let previous {
+                try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)
+            } else {
+                try fileIO.removeItem(path: destinationPath)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     public init() {}

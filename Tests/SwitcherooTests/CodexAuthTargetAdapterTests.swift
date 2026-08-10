@@ -19,7 +19,7 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
             fileIO: fileIO
         )
 
-        XCTAssertEqual(written, snapshot)
+        XCTAssertEqual(written.writtenData, snapshot)
         XCTAssertEqual(fileIO.files[path], snapshot)
     }
 
@@ -30,7 +30,7 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
 
         let written = try adapter.writeDestination(credential: nil, sourceAuthData: opaque, destinationPath: "/tmp/opaque.json", fileIO: fileIO)
 
-        XCTAssertEqual(written, opaque)
+        XCTAssertEqual(written.writtenData, opaque)
         XCTAssertEqual(fileIO.files["/tmp/opaque.json"], opaque)
     }
 
@@ -43,7 +43,7 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
 
         let written = try adapter.writeDestination(credential: nil, sourceAuthData: snapshot, destinationPath: path, fileIO: fileIO)
 
-        XCTAssertEqual(written, snapshot)
+        XCTAssertEqual(written.writtenData, snapshot)
         XCTAssertTrue(fileIO.writes.isEmpty)
     }
 

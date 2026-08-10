@@ -29,15 +29,11 @@ public struct CodexAuthTargetAdapter: AuthTargetAdapter {
         // Whole-file target: any existing bytes are replaced wholesale.
     }
 
-    public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data {
-        // Skip the write when the destination already holds exactly the source
-        // bytes (e.g. importing the account that is already active).
-        if fileIO.fileExists(path: destinationPath),
-           let existing = try? fileIO.readFile(path: destinationPath),
-           existing == sourceAuthData {
-            return sourceAuthData
+    public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult {
+        let previous = fileIO.fileExists(path: destinationPath) ? try fileIO.readFile(path: destinationPath) : nil
+        if previous != sourceAuthData {
+            try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
         }
-        try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
-        return sourceAuthData
+        return AuthTargetWriteResult(previousData: previous, writtenData: sourceAuthData)
     }
 }

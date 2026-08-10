@@ -112,7 +112,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
         let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)
 
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written.writtenData) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["openai-codex", "opencode-go"])
         let codex = try XCTUnwrap(object["openai-codex"] as? [String: Any])
         XCTAssertEqual(codex["type"] as? String, "oauth")
@@ -122,7 +122,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         XCTAssertEqual(codex["accountId"] as? String, "chatgpt-acct-1")
         let other = try XCTUnwrap(object["opencode-go"] as? [String: Any])
         XCTAssertEqual(other["key"] as? String, "placeholder-key")
-        XCTAssertEqual(fileIO.files[path], written)
+        XCTAssertEqual(fileIO.files[path], written.writtenData)
     }
 
     func testWriteDestinationCreatesDocumentWhenDestinationAbsent() throws {
@@ -132,7 +132,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
         let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: "~/.pi/agent/auth.json", fileIO: fileIO)
 
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written.writtenData) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["openai-codex"])
     }
 
@@ -171,7 +171,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)
 
         XCTAssertFalse(fileIO.itemExists(path: "\(path).lock"))
-        XCTAssertFalse((try JSONSerialization.jsonObject(with: written) as? [String: Any])?.isEmpty ?? true)
+        XCTAssertFalse((try JSONSerialization.jsonObject(with: written.writtenData) as? [String: Any])?.isEmpty ?? true)
     }
 
     // MARK: - Destination validation
@@ -219,7 +219,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
         let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)
 
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written.writtenData) as? [String: Any])
         let other = try XCTUnwrap(object["other-provider"] as? [String: Any])
         XCTAssertEqual(other["big-integer"] as? Int64, 9_007_199_254_740_993)
         XCTAssertEqual(other["negative"] as? Int64, Int64.min)

@@ -16,7 +16,7 @@ public protocol SwitcherooSecureStoring: Sendable {
     func delete(key: String) throws
     /// True when an item exists for the key. Lets callers distinguish "missing"
     /// (no pre-image needed) from a load failure (abort before mutating).
-    func itemExists(key: String) -> Bool
+    func itemExists(key: String) throws -> Bool
 }
 
 public protocol SwitcherooFileIO {

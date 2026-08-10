@@ -106,7 +106,7 @@ final class InMemorySecureStore: SwitcherooSecureStoring, @unchecked Sendable {
         lock.unlock()
     }
 
-    func itemExists(key: String) -> Bool {
+    func itemExists(key: String) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return storage[key] != nil
@@ -121,6 +121,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
     private(set) var removedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
     var failWritePaths: Set<String> = []
+    var failRemovePaths: Set<String> = []
     var failReadPaths: Set<String> = []
     /// Called after each successful write; lets tests simulate concurrent writers.
     var onWriteToPath: ((String) -> Void)?
@@ -168,6 +169,9 @@ final class InMemoryFileIO: SwitcherooFileIO {
     }
 
     func removeItem(path: String) throws {
+        guard !failRemovePaths.contains(path) else {
+            throw NSError(domain: "TestSupport", code: 7, userInfo: [NSLocalizedDescriptionKey: "remove failed for test"])
+        }
         files.removeValue(forKey: path)
         directories.remove(path)
         modificationDates.removeValue(forKey: path)
@@ -608,20 +612,19 @@ final class StubAuthTargetAdapter: @unchecked Sendable, AuthTargetAdapter {
         validationCalls += 1
     }
 
-    func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data {
+    func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult {
         documentCalls += 1
         if let documentError {
             throw documentError
         }
         switch writeMode {
         case .replaceWithSource:
-            if fileIO.fileExists(path: destinationPath),
-               let existing = try? fileIO.readFile(path: destinationPath),
-               existing == sourceAuthData {
-                return sourceAuthData
+            let existing = fileIO.fileExists(path: destinationPath) ? try fileIO.readFile(path: destinationPath) : nil
+            if existing == sourceAuthData {
+                return AuthTargetWriteResult(previousData: existing, writtenData: sourceAuthData)
             }
             try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
-            return sourceAuthData
+            return AuthTargetWriteResult(previousData: existing, writtenData: sourceAuthData)
         case .upsertKey(let key):
             guard let credential else {
                 throw AuthTargetSyncError.unsupportedSource(targetId: id, reason: "missing converted credential")
@@ -629,7 +632,7 @@ final class StubAuthTargetAdapter: @unchecked Sendable, AuthTargetAdapter {
             let existing = fileIO.fileExists(path: destinationPath) ? try fileIO.readFile(path: destinationPath) : nil
             let merged = try AuthTargetDocument.merging(credential, into: existing, targetId: id, destinationPath: destinationPath)
             try fileIO.writeFileAtomically(merged, path: destinationPath, permissions: 0o600)
-            return merged
+            return AuthTargetWriteResult(previousData: existing, writtenData: merged)
         }
     }
 }

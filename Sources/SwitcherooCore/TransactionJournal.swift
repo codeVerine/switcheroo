@@ -7,8 +7,32 @@ import Foundation
 /// user-only permissions and never appear in logs or error text.
 struct TransactionJournal: Codable {
     struct Target: Codable, Sendable {
+        var id: String
         var path: String
         var previous: Data?
+        var expected: Data?
+
+        init(id: String = "unknown", path: String, previous: Data?, expected: Data? = nil) {
+            self.id = id
+            self.path = path
+            self.previous = previous
+            self.expected = expected
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id
+            case path
+            case previous
+            case expected
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(String.self, forKey: .id) ?? "unknown"
+            path = try container.decode(String.self, forKey: .path)
+            previous = try container.decodeIfPresent(Data.self, forKey: .previous)
+            expected = try container.decodeIfPresent(Data.self, forKey: .expected)
+        }
     }
 
     struct KeychainChange: Codable, Sendable {
