@@ -983,9 +983,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                         id: target.adapter.id,
                         path: target.destinationPath,
                         previous: target.previous,
-                        quarantinePath: target.previous == nil
-                            ? "\(target.destinationPath).switcheroo-quarantine.\(txid).\(index)"
-                            : nil
+                        quarantinePath: "\(target.destinationPath).switcheroo-quarantine.\(txid).\(index)"
                     )
                 },
                 keychainChanges: plan.keychainChanges.map { change in

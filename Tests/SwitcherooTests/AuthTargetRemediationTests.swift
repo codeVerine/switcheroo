@@ -204,7 +204,7 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertFalse(fileIO.itemExists(path: journalPath))
     }
 
-    func testRollbackJournalsQuarantineBeforeRemovingNilPreimage() throws {
+    func testRollbackUsesPreallocatedQuarantineForEveryTarget() throws {
         let first = makeAccount(id: "acc-first", name: "First")
         let second = makeAccount(id: "acc-second", name: "Second")
         let config = SwitcherooConfig(
@@ -229,6 +229,7 @@ final class AuthTargetRemediationTests: XCTestCase {
         let secondAuth = try makeCodexAuthData(refreshToken: "second")
         harness.secureStore.items["codex:\(first.id)"] = firstAuth
         harness.secureStore.items["codex:\(second.id)"] = secondAuth
+        harness.fileIO.files["~/.stub-target/auth.json"] = firstAuth
         harness.fileIO.files[activeAuthPath] = firstAuth
         harness.fileIO.failWritePaths.insert(activeAuthPath)
 
@@ -246,7 +247,7 @@ final class AuthTargetRemediationTests: XCTestCase {
 
         XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: second.id))
         XCTAssertTrue(observedPrepublishedQuarantine)
-        XCTAssertFalse(harness.fileIO.itemExists(path: "~/.stub-target/auth.json"))
+        XCTAssertEqual(harness.fileIO.files["~/.stub-target/auth.json"], firstAuth)
     }
 
     func testStartupReconcilesCommittedTransactionByCompletingIt() throws {
