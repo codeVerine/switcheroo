@@ -137,36 +137,30 @@ public struct CodexAPIClient: Sendable {
 
     private let transport: any CodexHTTPTransport
     private let userAgent: String
+    private let now: @Sendable () -> Date
 
     public init(
         baseURL: URL,
         pathStyle: CodexAPIPathStyle,
         transport: any CodexHTTPTransport,
-        userAgent: String = "switcheroo"
+        userAgent: String = "switcheroo",
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.baseURL = baseURL
         self.pathStyle = pathStyle
         self.transport = transport
         self.userAgent = userAgent
+        self.now = now
     }
 
     /// Performs an authenticated GET against `{base}{pathPrefix}/{path}`.
     ///
     /// The credential is only ever placed in request headers, never in the URL
-    /// or in any error the client produces.
+    /// or in any error the client produces. Already-classified transport
+    /// errors (`.invalidResponse`) pass through unchanged; only unknown errors
+    /// are normalized to `.networkFailure`.
     public func get(path: String, credential: CodexAPICredential) async throws -> Data {
-        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
-              components.scheme?.lowercased() == "https",
-              components.host != nil,
-              components.query == nil,
-              components.fragment == nil,
-              !path.contains("?") && !path.contains("#") else {
-            throw CodexAPIClientError.invalidRequest
-        }
-        let segments = [components.path, pathStyle.pathPrefix, path]
-            .flatMap { $0.split(separator: "/", omittingEmptySubsequences: true).map(String.init) }
-        components.path = "/" + segments.joined(separator: "/")
-        guard let url = components.url else {
+        guard let url = Self.makeURL(baseURL: baseURL, pathStyle: pathStyle, path: path) else {
             throw CodexAPIClientError.invalidRequest
         }
 
@@ -184,20 +178,40 @@ public struct CodexAPIClient: Sendable {
         let response: CodexAPIResponse
         do {
             response = try await transport.perform(CodexAPIRequest(url: url, headers: headers))
+        } catch let error as CodexAPIClientError {
+            throw error
         } catch {
             throw CodexAPIClientError.networkFailure
         }
 
         guard response.status == 200 else {
-            let retryAfterSeconds = Self.parseRetryAfter(response.headers["retry-after"])
+            let retryAfterSeconds = parseRetryAfter(response.headers["retry-after"])
             throw CodexAPIClientError.httpStatus(response.status, retryAfterSeconds: retryAfterSeconds)
         }
         return response.body
     }
 
+    /// Builds `{base}{pathPrefix}/{path}` while normalizing a trailing slash on
+    /// the base URL (mirroring the Codex CLI's base-URL normalization).
+    private static func makeURL(baseURL: URL, pathStyle: CodexAPIPathStyle, path: String) -> URL? {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil,
+              !path.contains("?") && !path.contains("#") else {
+            return nil
+        }
+        let segments = [components.path, pathStyle.pathPrefix, path]
+            .flatMap { $0.split(separator: "/", omittingEmptySubsequences: true).map(String.init) }
+        components.path = "/" + segments.joined(separator: "/")
+        return components.url
+    }
+
     /// Parses a `Retry-After` header value: either delta seconds or an
-    /// HTTP-date. Unparseable values yield `nil` (no server hint).
-    private static func parseRetryAfter(_ value: String?) -> Int? {
+    /// HTTP-date. Unparseable values yield `nil` (no server hint). Uses the
+    /// injected clock so parsing is deterministic in tests.
+    private func parseRetryAfter(_ value: String?) -> Int? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespaces)
         if let seconds = Int(trimmed), seconds >= 0 {
@@ -209,7 +223,7 @@ public struct CodexAPIClient: Sendable {
             formatter.timeZone = TimeZone(secondsFromGMT: 0)
             formatter.dateFormat = format
             if let date = formatter.date(from: trimmed) {
-                let seconds = Int(date.timeIntervalSinceNow)
+                let seconds = Int(date.timeIntervalSince(now()))
                 return max(0, seconds)
             }
         }

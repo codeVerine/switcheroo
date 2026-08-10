@@ -525,6 +525,30 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     }
 }
 
+/// Deterministic clock for tests: advance it instead of sleeping.
+final class FakeClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    init(now: Date = Date(timeIntervalSince1970: 1_700_000_000)) {
+        self.current = now
+    }
+
+    var now: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        current = current.addingTimeInterval(interval)
+        lock.unlock()
+    }
+}
+
+/// Test double for live account-usage fetching. Handlers are registered per
+/// account id; an optional per-account delay simulates slow responses.
 final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
     private let lock = NSLock()
     private var handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage]

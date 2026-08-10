@@ -54,8 +54,24 @@ final class MockCodexHTTPTransport: CodexHTTPTransport, @unchecked Sendable {
 final class CodexAPIClientTests: XCTestCase {
     private let credential = CodexAPICredential(accessToken: "tok-123", accountId: "acct-1")
 
-    func makeClient(baseURL: URL, style: CodexAPIPathStyle, transport: MockCodexHTTPTransport) -> CodexAPIClient {
-        CodexAPIClient(baseURL: baseURL, pathStyle: style, transport: transport)
+    func makeClient(
+        baseURL: URL,
+        style: CodexAPIPathStyle,
+        transport: MockCodexHTTPTransport,
+        clock: FakeClock? = nil
+    ) -> CodexAPIClient {
+        let now: @Sendable () -> Date
+        if let clock {
+            now = { clock.now }
+        } else {
+            now = { Date() }
+        }
+        return CodexAPIClient(
+            baseURL: baseURL,
+            pathStyle: style,
+            transport: transport,
+            now: now
+        )
     }
 
     func testChatGptPathStyleBuildsWhamUsageRequestWithAuthHeaders() async throws {
@@ -278,25 +294,55 @@ final class CodexAPIClientTests: XCTestCase {
 
     func testRetryAfterHTTPDateParsedAsDeltaSeconds() async throws {
         let transport = MockCodexHTTPTransport()
-        let date = Date().addingTimeInterval(75)
+        let clock = FakeClock(now: Date(timeIntervalSince1970: 1_700_000_000))
+        let retryDate = clock.now.addingTimeInterval(75)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        transport.setResponse(status: 429, body: Data("{}".utf8), headers: ["retry-after": formatter.string(from: date)])
-        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+        transport.setResponse(status: 429, body: Data("{}".utf8), headers: ["retry-after": formatter.string(from: retryDate)])
+        let client = makeClient(
+            baseURL: CodexAPIClient.defaultChatGptBaseURL,
+            style: .chatgpt,
+            transport: transport,
+            clock: clock
+        )
 
         do {
             _ = try await client.get(path: "usage", credential: credential)
             XCTFail("expected httpStatus error")
         } catch let error as CodexAPIClientError {
-            guard case .httpStatus(429, let retryAfterSeconds) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertEqual(try XCTUnwrap(retryAfterSeconds), 75, accuracy: 5)
+            XCTAssertEqual(error, .httpStatus(429, retryAfterSeconds: 75))
         } catch {
             XCTFail("unexpected error: \(error)")
         }
+    }
+
+    func testInvalidResponsePassesThroughClientTypedError() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setError(CodexAPIClientError.invalidResponse)
+        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+
+        do {
+            _ = try await client.get(path: "usage", credential: credential)
+            XCTFail("expected invalidResponse")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .invalidResponse, "already-classified errors must pass through unchanged")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testBaseURLWithTrailingSlashIsNormalized() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 200, body: Data("{}".utf8))
+        let base = URL(string: "https://chatgpt.com/backend-api/")!
+        let client = makeClient(baseURL: base, style: .chatgpt, transport: transport)
+
+        _ = try await client.get(path: "usage", credential: credential)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.url.absoluteString, "https://chatgpt.com/backend-api/wham/usage")
     }
 
     func testUnparseableRetryAfterYieldsNoHint() async throws {
@@ -477,6 +523,51 @@ final class CodexUsageFetcherTests: XCTestCase {
 
         XCTAssertEqual(usage.fiveHour?.remainingPercent, 58)
         XCTAssertNil(usage.weekly)
+    }
+
+    func testReversedPartialWindowIsNotDoubleClassified() async throws {
+        // Only primary carries a weekly-duration window: it must populate
+        // exactly one output and never fall back into the five-hour slot too.
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "plan_type": "pro",
+            "rate_limit": [
+                "primary_window": ["used_percent": 30, "limit_window_seconds": 604_800],
+            ],
+        ])
+        transport.setResponse(status: 200, body: payload)
+        let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+
+        XCTAssertNil(usage.fiveHour, "a weekly-duration window must not also populate the five-hour slot")
+        XCTAssertEqual(usage.weekly?.usedPercent, 30)
+        XCTAssertEqual(usage.weekly?.windowSeconds, 604_800)
+    }
+
+    func testLoneSecondaryWithUnrecognizedDurationLandsInWeekly() async throws {
+        // Positional fallback must respect the primary/secondary convention:
+        // a lone secondary window with no matching duration goes to weekly.
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "plan_type": "pro",
+            "rate_limit": [
+                "secondary_window": ["used_percent": 55, "limit_window_seconds": 999],
+            ],
+        ])
+        transport.setResponse(status: 200, body: payload)
+        let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+
+        XCTAssertNil(usage.fiveHour, "a lone secondary window must not fill the five-hour slot")
+        XCTAssertEqual(usage.weekly?.usedPercent, 55)
+    }
+
+    func testInvalidResponseFromTransportMapsToMalformedResponse() async {
+        transport.setError(CodexAPIClientError.invalidResponse)
+        do {
+            _ = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+            XCTFail("expected malformedResponse")
+        } catch let error as SwitcherooUsageError {
+            XCTAssertEqual(error, .malformedResponse)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 
     func testMissingResetAtProducesNilResetsAt() async throws {
