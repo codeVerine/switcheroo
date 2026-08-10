@@ -66,21 +66,21 @@ public struct AuthTargetPublicationError: Error, Sendable {
 
 public extension AuthTargetAdapter {
     func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool {
-        guard fileIO.fileExists(path: destinationPath) else {
-            return previous == nil
-        }
-        guard let current = try? fileIO.readFile(path: destinationPath) else {
-            return false
-        }
-        if let previous, current == previous { return true }
-        guard current == expectedCurrent else { return false }
         do {
-            if let previous {
-                try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)
-            } else {
-                try fileIO.removeItem(path: destinationPath)
+            return try fileIO.withExclusiveLock(path: "\(destinationPath).lock") {
+                guard fileIO.fileExists(path: destinationPath) else {
+                    return previous == nil
+                }
+                let current = try fileIO.readFile(path: destinationPath)
+                if let previous, current == previous { return true }
+                guard current == expectedCurrent else { return false }
+                if let previous {
+                    try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)
+                } else {
+                    try fileIO.removeItem(path: destinationPath)
+                }
+                return true
             }
-            return true
         } catch {
             return false
         }

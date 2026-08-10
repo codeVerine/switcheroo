@@ -1010,9 +1010,19 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 // unrestored; still attempt Keychain and config rollback and
                 // aggregate every failure. The journal must survive regardless,
                 // so startup reconciliation can retry the unrestored target.
+                var journalResetFailure: String?
+                if journal.configCommitted {
+                    journal.configCommitted = false
+                    do {
+                        try writeJournal(journal)
+                    } catch {
+                        journalResetFailure = "transaction journal could not be returned to an uncommitted state"
+                    }
+                }
                 if let targetFailure = error as? TargetRollbackIncomplete {
                     let failures = targetFailure.unrestoredPaths
                         + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: plan.previousConfig)
+                        + (journalResetFailure.map { [$0] } ?? [])
                     throw AuthTargetSyncError.rollbackIncomplete(
                         message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
                     )
@@ -1022,12 +1032,13 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     appliedChanges: appliedChanges,
                     previousConfig: plan.previousConfig
                 )
-                if failures.isEmpty {
+                if failures.isEmpty && journalResetFailure == nil {
                     try? deleteJournal(txid: journal.txid)
                     throw error
                 }
+                let allFailures = failures + (journalResetFailure.map { [$0] } ?? [])
                 throw AuthTargetSyncError.rollbackIncomplete(
-                    message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
+                    message: "Account switch failed and could not be fully rolled back. Failed to restore: \(allFailures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
                 )
             }
 

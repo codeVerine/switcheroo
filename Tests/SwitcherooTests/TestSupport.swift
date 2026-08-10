@@ -120,6 +120,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
     private(set) var writes: [(path: String, data: Data, permissions: Int?)] = []
     private(set) var removedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
+    private(set) var lockPaths: [String] = []
     var failWritePaths: Set<String> = []
     var failAfterWriteOncePaths: Set<String> = []
     var failRemovePaths: Set<String> = []
@@ -211,6 +212,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
     }
 
     func withExclusiveLock<T>(path: String, _ body: () throws -> T) throws -> T {
+        lockPaths.append(path)
         while true {
             Self.registry.mutex.lock()
             if !Self.registry.heldLocks.contains(path) {

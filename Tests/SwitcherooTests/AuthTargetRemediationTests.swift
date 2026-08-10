@@ -263,6 +263,34 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertTrue(try JSONDecoder().decode(TransactionJournal.self, from: journalData).configCommitted)
     }
 
+    func testCommitMarkerDurabilityFailureLeavesJournalUncommittedWhenRollbackIsIncomplete() throws {
+        let (harness, firstId, secondId, firstAuth, _) = try makeTwoAccountHarness(
+            authTargetAdapters: [PiAuthTargetAdapter()]
+        )
+        let concurrentPi = Data(#"{"openai-codex":{"type":"oauth","access":"concurrent"}}"#.utf8)
+        harness.fileIO.onWriteToPath = { path in
+            guard path == self.journalPath,
+                  let data = harness.fileIO.files[path],
+                  let journal = try? JSONDecoder().decode(TransactionJournal.self, from: data),
+                  journal.configCommitted else {
+                return
+            }
+            harness.fileIO.files[self.piAuthPath] = concurrentPi
+            harness.fileIO.failAfterWriteOncePaths.insert(path)
+        }
+
+        XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: secondId)) { error in
+            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+                return XCTFail("Expected rollbackIncomplete, got \(error)")
+            }
+        }
+
+        let journalData = try XCTUnwrap(harness.fileIO.files[journalPath])
+        XCTAssertFalse(try JSONDecoder().decode(TransactionJournal.self, from: journalData).configCommitted)
+        XCTAssertEqual(harness.fileIO.files[activeAuthPath], firstAuth)
+        XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
+    }
+
     func testStartupReconcileRollsBackJournaledKeychainChanges() throws {
         let previousStored = try makeCodexAuthData(refreshToken: "old-refresh")
         let newStored = try makeCodexAuthData(refreshToken: "new-refresh")
