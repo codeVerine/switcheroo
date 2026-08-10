@@ -199,10 +199,14 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         let fileIO = InMemoryFileIO()
         let lockPath = "~/.pi/agent/auth.json.lock"
         let lock = try PiAuthFileLock.acquire(path: "~/.pi/agent/auth.json", fileIO: fileIO)
-        let initialDate = try XCTUnwrap(fileIO.modificationDates[lockPath])
-        Thread.sleep(forTimeInterval: 0.08)
-        let refreshedDate = try XCTUnwrap(fileIO.modificationDates[lockPath])
-        lock.release()
+        defer { lock.release() }
+        let initialDate = try XCTUnwrap(fileIO.modificationDate(path: lockPath))
+        let deadline = Date().addingTimeInterval(0.5)
+        var refreshedDate = initialDate
+        while refreshedDate <= initialDate && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+            refreshedDate = try XCTUnwrap(fileIO.modificationDate(path: lockPath))
+        }
 
         XCTAssertGreaterThan(refreshedDate, initialDate)
     }

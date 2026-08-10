@@ -116,6 +116,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
     var files: [String: Data] = [:]
     var directories: Set<String> = []
     var modificationDates: [String: Date] = [:]
+    private let modificationDatesLock = NSLock()
     private(set) var readPaths: [String] = []
     private(set) var writes: [(path: String, data: Data, permissions: Int?)] = []
     private(set) var removedPaths: [String] = []
@@ -217,7 +218,9 @@ final class InMemoryFileIO: SwitcherooFileIO {
         }
         files.removeValue(forKey: path)
         directories.remove(path)
+        modificationDatesLock.lock()
         modificationDates.removeValue(forKey: path)
+        modificationDatesLock.unlock()
         removedPaths.append(path)
     }
 
@@ -226,7 +229,9 @@ final class InMemoryFileIO: SwitcherooFileIO {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError, userInfo: [NSLocalizedDescriptionKey: "directory exists"])
         }
         directories.insert(path)
+        modificationDatesLock.lock()
         modificationDates[path] = Date()
+        modificationDatesLock.unlock()
         createdDirectories.append(path)
     }
 
@@ -236,10 +241,14 @@ final class InMemoryFileIO: SwitcherooFileIO {
     }
 
     func modificationDate(path: String) -> Date? {
-        modificationDates[path]
+        modificationDatesLock.lock()
+        defer { modificationDatesLock.unlock() }
+        return modificationDates[path]
     }
 
     func setModificationDate(path: String, date: Date) throws {
+        modificationDatesLock.lock()
+        defer { modificationDatesLock.unlock() }
         modificationDates[path] = date
     }
 
