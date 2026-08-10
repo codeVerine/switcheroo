@@ -51,7 +51,7 @@ Switching an account keeps the active Codex credential and every configured harn
 - target identity: `id`, `displayName`
 - destination resolution: `destinationAuthFilePath(forProviderState:)`
 - supported source validation/conversion: `convertedCredential(fromSourceAuthData:)`
-- destination validation before any publication: `validateExistingDestination(existingDestinationData:)`
+- destination validation before any publication: `validateExistingDestination(existingDestinationData:destinationPath:)`
 - destination-specific preservation or replacement at publication: `writeDestination(credential:sourceAuthData:destinationPath:fileIO:)`
 - atomic secure writes and transaction serialization are the engine's job: every destination is written via a unique same-directory temporary file created exclusively with mode `0o600` (fsynced before an atomic rename), and error text is constructed from fixed strings and paths only (secret-free)
 
