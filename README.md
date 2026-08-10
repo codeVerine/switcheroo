@@ -78,7 +78,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 
 | Switcheroo does | Switcheroo does not |
 | --- | --- |
-| Manage local auth snapshots for accounts you control. | Monitor live usage limits in real time or poll them in the background. |
+| Manage local auth snapshots for accounts you control. | Monitor live usage limits in real time (background polling runs on a low-frequency 5/30-minute tiered schedule). |
 | Replace `~/.codex/auth.json` when you switch. | Refresh tokens itself. |
 | Use local parsing for display metadata and auth-target conversion. | Call OpenAI model or platform APIs. |
 | Fetch every account's remaining allowance from the read-only Codex usage endpoint, one credential per account. | Share accounts, pool credentials, or bypass terms of service. |

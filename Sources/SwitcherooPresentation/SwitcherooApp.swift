@@ -310,13 +310,13 @@ public final class SwitcherooApp: @unchecked Sendable {
             // needs a fetch, so superseded in-flight results cannot land.
             usageTask?.cancel()
             usageTask = nil
-            pending = pendingAccounts(accountIds: accountIds, activeAccountId: activeAccountId, now: currentTime, bypassCache: false)
+            pending = pendingAccounts(accountIds: accountIds, activeAccountId: activeAccountId, now: currentTime)
             usageGeneration += 1
         case .tieredTimer:
             // Background tiered refresh: only accounts whose tier interval has
             // elapsed are due. When nothing is due, leave the current
             // generation untouched so in-flight results can still land.
-            pending = pendingAccounts(accountIds: accountIds, activeAccountId: activeAccountId, now: currentTime, bypassCache: false)
+            pending = pendingAccounts(accountIds: accountIds, activeAccountId: activeAccountId, now: currentTime)
             guard !pending.isEmpty else {
                 lock.unlock()
                 return
@@ -364,21 +364,21 @@ public final class SwitcherooApp: @unchecked Sendable {
     /// result is older than the active tier interval, inactive accounts when
     /// older than the inactive tier interval; never inside a failure cooldown;
     /// never already running in the current generation.
-    private func pendingAccounts(accountIds: [String], activeAccountId: String?, now: Date, bypassCache: Bool) -> [String] {
+    private func pendingAccounts(accountIds: [String], activeAccountId: String?, now: Date) -> [String] {
         var pending: [String] = []
         for accountId in accountIds {
             let tierInterval = (accountId == activeAccountId)
                 ? usageActiveRefreshInterval
                 : usageInactiveRefreshInterval
             switch state.usageStatesByAccountId[accountId] {
-            case .loaded(let usage) where !bypassCache && now.timeIntervalSince(usage.fetchedAt) < tierInterval:
+            case .loaded(let usage) where now.timeIntervalSince(usage.fetchedAt) < tierInterval:
                 continue
-            case .unavailable where !bypassCache && isWithinFailureCooldown(accountId: accountId, now: now, isActive: accountId == activeAccountId):
+            case .unavailable where isWithinFailureCooldown(accountId: accountId, now: now, isActive: accountId == activeAccountId):
                 continue
             default:
                 break
             }
-            if !bypassCache, usageInFlightByAccount[accountId] == usageGeneration {
+            if usageInFlightByAccount[accountId] == usageGeneration {
                 continue
             }
             pending.append(accountId)
