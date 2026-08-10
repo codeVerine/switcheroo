@@ -66,6 +66,27 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
         XCTAssertEqual(fileIO.lockPaths, ["\(path).lock"])
     }
 
+    func testRestoreDestinationReportsConcurrentRecreationWhenPreviousWasAbsent() throws {
+        let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
+        let fileIO = InMemoryFileIO()
+        let path = "/tmp/codex-auth.json"
+        let expected = Data("expected".utf8)
+        let concurrent = Data("concurrent".utf8)
+        fileIO.files[path] = expected
+        fileIO.onRemovePath = { removedPath in
+            guard removedPath == path else { return }
+            fileIO.files[removedPath] = concurrent
+        }
+
+        XCTAssertFalse(adapter.restoreDestination(
+            previous: nil,
+            expectedCurrent: expected,
+            destinationPath: path,
+            fileIO: fileIO
+        ))
+        XCTAssertEqual(fileIO.files[path], concurrent)
+    }
+
     func testConversionRejectsEmptySource() {
         let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
 

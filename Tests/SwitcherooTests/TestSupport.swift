@@ -127,6 +127,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
     var failReadPaths: Set<String> = []
     /// Called after each successful write; lets tests simulate concurrent writers.
     var onWriteToPath: ((String) -> Void)?
+    var onRemovePath: ((String) -> Void)?
 
     /// Destination writes excluding the internal transaction journal.
     var publishedWrites: [(path: String, data: Data, permissions: Int?)] {
@@ -187,6 +188,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
         directories.remove(path)
         modificationDates.removeValue(forKey: path)
         removedPaths.append(path)
+        onRemovePath?(path)
     }
 
     func createDirectoryExclusive(path: String) throws {
