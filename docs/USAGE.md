@@ -37,7 +37,7 @@ Menu bar only; the CLI does not fetch or show usage. Every account row in the dr
 - **How it is fetched**: Switcheroo reads each account's saved `auth.json` snapshot from Keychain, derives a bearer credential in memory, and calls the Codex usage endpoint (same endpoint family the Codex CLI uses). See [Data & Security](/docs/DATA-AND-SECURITY.md).
 - **What the numbers mean**: the endpoint reports consumption as a percentage of each window. Switcheroo derives the remaining allowance (`100 − used`, clamped to 0–100) and shows that.
 - **Unavailable**: if an account's request fails (offline, sign-in expired, service busy, or an unexpected response), that row shows `Usage unavailable` with a hover hint. Other rows keep their own results - one account's failure never blocks the rest.
-- **Caching and retries**: results are kept in memory for up to one minute; a request is skipped while one is already in flight for the same account, so opening the menu repeatedly does not spam the endpoint. Failed rows wait out a short cooldown (honoring the server's `Retry-After` hint when provided) before being retried, and at most three requests run at once. No usage requests ever originate from the background auth-sync timer.
+- **Caching and retries**: results are kept in memory for up to one minute; a request is skipped while one is already in flight for the same account, so opening the menu repeatedly does not spam the endpoint. Failed rows wait out a short cooldown (honoring the server's `Retry-After` hint when provided) before being retried. The per-batch request limit is documented in [Data & Security](/docs/DATA-AND-SECURITY.md). No usage requests ever originate from the background auth-sync timer.
 
 Background behavior:
 
