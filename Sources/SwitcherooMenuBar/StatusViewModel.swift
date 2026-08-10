@@ -35,20 +35,19 @@ struct StatusViewModel: Equatable, Sendable {
         let providerDisplayName = Self.providerDisplayName(state: state)
         self.accounts = state.accounts.map { account in
             let metadata = state.accountMetadataById[account.id]
-            let isActive = state.activeAccountId == account.id
             return Account(
                 id: account.id,
                 name: account.name,
                 email: metadata?.email,
-                isActive: isActive,
+                isActive: state.activeAccountId == account.id,
                 isRenaming: renameDraftAccountId == account.id,
                 expiry: state.accessTokenExpiryByAccountId[account.id].map {
                     ExpiryDisplay.make(expiry: $0, now: now)
                 },
-                usage: isActive ? UsageDisplay.make(
+                usage: UsageDisplay.make(
                     state: state.usageStatesByAccountId[account.id] ?? .notRequested,
                     now: now
-                ) : nil,
+                ),
                 showSwitchAction: state.activeAccountId != account.id
             )
         }

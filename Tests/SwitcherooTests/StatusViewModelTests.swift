@@ -189,7 +189,7 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.canImportCurrentAccount)
     }
 
-    func testUsageDisplayShownOnlyForActiveAccount() {
+    func testUsageDisplayShownForEveryAccountRow() {
         let active = makeAccount(id: "acc-1", name: "Primary")
         let backup = makeAccount(id: "acc-2", name: "Backup")
         let usage = SwitcherooAccountUsage(
@@ -198,10 +198,16 @@ final class StatusViewModelTests: XCTestCase {
             weekly: SwitcherooUsageWindow(usedPercent: 40, remainingPercent: 60, windowSeconds: 604_800, resetsAt: nil),
             fetchedAt: now
         )
+        let backupUsage = SwitcherooAccountUsage(
+            accountId: "acc-2",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 90, remainingPercent: 10, windowSeconds: 18_000, resetsAt: nil),
+            weekly: SwitcherooUsageWindow(usedPercent: 70, remainingPercent: 30, windowSeconds: 604_800, resetsAt: nil),
+            fetchedAt: now
+        )
         let state = SwitcherooAppState(
             accounts: [active, backup],
             activeAccountId: active.id,
-            usageStatesByAccountId: [active.id: .loaded(usage)]
+            usageStatesByAccountId: [active.id: .loaded(usage), backup.id: .loaded(backupUsage)]
         )
 
         let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now)
@@ -209,7 +215,8 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.accounts[0].usage?.text, "5h 58% · 1w 60%")
         XCTAssertEqual(viewModel.accounts[0].usage?.kind, .loaded)
         XCTAssertFalse(viewModel.accounts[0].usage?.hasLowRemaining ?? true)
-        XCTAssertNil(viewModel.accounts[1].usage)
+        XCTAssertEqual(viewModel.accounts[1].usage?.text, "5h 10% · 1w 30%")
+        XCTAssertTrue(viewModel.accounts[1].usage?.hasLowRemaining ?? false)
     }
 
     func testUsageDisplayLoadingAndUnavailableStates() {

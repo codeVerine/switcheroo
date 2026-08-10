@@ -65,7 +65,7 @@ Switcheroo shows the active account's remaining five-hour and weekly allowance w
 - **Usage service is busy or unavailable right now** - the endpoint returned an error or a rate-limit response. Retry shortly.
 - **Unexpected usage response** - the endpoint's response shape changed or was malformed. The account itself is unaffected; switching still works.
 
-A usage failure never blocks switching accounts, and it never changes or deletes your saved credentials.
+A usage failure only affects that account's row; the account itself, the other rows, and switching are unaffected, and a failure never changes or deletes your saved credentials.
 
 ## Reset Switcheroo
 

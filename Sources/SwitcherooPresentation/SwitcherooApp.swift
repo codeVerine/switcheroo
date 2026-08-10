@@ -65,9 +65,15 @@ public final class SwitcherooApp: @unchecked Sendable {
 
     public private(set) var state: SwitcherooAppState
 
+    /// Fired whenever an async usage result lands, so live views (the menu bar
+    /// dropdown) can re-read `snapshot()` and update without waiting for the
+    /// next synchronous refresh.
+    public var onUsageUpdated: (@Sendable () -> Void)?
+
     private var usageGeneration = 0
     private var usageTask: Task<Void, Never>?
-    private var usageIdentity: String?
+    private var usageProviderId: String?
+    private var usageInFlightByAccount: [String: Int] = [:]
 
     public init(
         engine: SwitcherooEngine,
@@ -81,6 +87,10 @@ public final class SwitcherooApp: @unchecked Sendable {
         self.usageFetcher = usageFetcher
         self.usageStalenessInterval = usageStalenessInterval
         self.state = SwitcherooAppState(providers: providers)
+    }
+
+    deinit {
+        usageTask?.cancel()
     }
 
     public func refresh() {
@@ -104,7 +114,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.accountMetadataById = metadataById
             lock.unlock()
 
-            refreshUsageIfNeeded(activeAccountId: activeId)
+            refreshUsageIfNeeded(accountIds: accounts.map(\.id))
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
@@ -112,65 +122,98 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
-    /// Kicks off a usage fetch for the active account when one is needed.
+    /// Kicks off a usage batch for all accounts when one is needed.
     ///
-    /// - Old-account usage is cleared the moment the active account changes so
-    ///   a switch can never show the previous account's usage.
-    /// - A bounded `.loading` state is published synchronously.
-    /// - In-flight work is cancelled and a generation token is bumped so a
-    ///   slower older response can never overwrite the latest selection.
-    /// - Repeated calls (view refresh, window focus) are cheap: fetches are
-    ///   skipped while one is in flight or when a fresh result already exists.
-    private func refreshUsageIfNeeded(activeAccountId: String?) {
-        let providerId = resolveSelectedProviderId()
-        let identity = providerId.map { "\($0):\(activeAccountId ?? "")" } ?? activeAccountId
-
-        guard let activeAccountId, let usageFetcher, let identity else {
+    /// - Every account is fetched with its own saved credential; results stay
+    ///   keyed by account id so each dropdown row shows its own usage.
+    /// - A bounded `.loading` state is published synchronously per account.
+    /// - Repeated calls (view refresh, window focus) are cheap: accounts are
+    ///   skipped while a same-generation fetch is in flight or when a fresh
+    ///   result already exists.
+    /// - Starting a batch bumps the generation, cancels the previous batch, and
+    ///   folds any still-loading accounts into the new batch, so a slower older
+    ///   response can never overwrite a newer batch (latest-request-wins) and
+    ///   a loading row always resolves.
+    /// - One account's failure only marks that account unavailable; the other
+    ///   rows keep their own results (partial-failure isolation).
+    private func refreshUsageIfNeeded(accountIds: [String]) {
+        guard usageFetcher != nil else {
             lock.lock()
             usageTask?.cancel()
             usageTask = nil
             usageGeneration += 1
+            usageInFlightByAccount = [:]
             state.usageStatesByAccountId = [:]
-            usageIdentity = nil
+            usageProviderId = nil
             lock.unlock()
             return
         }
+
+        let providerId = resolveSelectedProviderId()
 
         lock.lock()
-        let activeChanged = usageIdentity != identity
-        usageIdentity = identity
-        if activeChanged {
-            // Immediate transition: drop any stale state from the previous account.
+        if usageProviderId != providerId {
+            // Provider switch: everything from the previous provider is stale.
             usageTask?.cancel()
             usageGeneration += 1
+            usageInFlightByAccount = [:]
             state.usageStatesByAccountId = [:]
+            usageProviderId = providerId
         }
 
-        switch state.usageStatesByAccountId[activeAccountId] {
-        case .loading:
-            lock.unlock()
-            return
-        case .loaded(let usage) where Date().timeIntervalSince(usage.fetchedAt) < usageStalenessInterval:
-            lock.unlock()
-            return
-        default:
-            break
+        // Prune state for accounts that no longer exist.
+        let liveIds = Set(accountIds)
+        state.usageStatesByAccountId = state.usageStatesByAccountId.filter { liveIds.contains($0.key) }
+        usageInFlightByAccount = usageInFlightByAccount.filter { liveIds.contains($0.key) }
+
+        let now = Date()
+        var pending: [String] = []
+        for accountId in accountIds {
+            switch state.usageStatesByAccountId[accountId] {
+            case .loaded(let usage) where now.timeIntervalSince(usage.fetchedAt) < usageStalenessInterval:
+                continue
+            default:
+                break
+            }
+            if usageInFlightByAccount[accountId] == usageGeneration {
+                // A fetch for the current generation is already running.
+                continue
+            }
+            pending.append(accountId)
         }
 
-        state.usageStatesByAccountId[activeAccountId] = .loading
+        guard !pending.isEmpty else {
+            lock.unlock()
+            return
+        }
+
         usageGeneration += 1
         let generation = usageGeneration
-        let accountId = activeAccountId
+
+        // Superseded in-flight fetches (older generation) would have their
+        // results dropped; fold them into this batch so their rows resolve.
+        for (accountId, inFlightGeneration) in usageInFlightByAccount where inFlightGeneration < generation {
+            if case .loading = state.usageStatesByAccountId[accountId] {
+                pending.append(accountId)
+            }
+        }
+        let uniquePending = Array(Set(pending))
+
+        for accountId in uniquePending {
+            usageInFlightByAccount[accountId] = generation
+            state.usageStatesByAccountId[accountId] = .loading
+        }
         usageTask?.cancel()
         lock.unlock()
 
         usageTask = Task { [weak self] in
             guard let self else { return }
-            let next = await self.fetchUsage(accountId: accountId)
-            self.publishUsage(accountId: accountId, generation: generation, state: next)
+            await self.fetchUsageBatch(accountIds: uniquePending, generation: generation)
         }
     }
 
+    /// Fetches one account's usage. Failures are isolated per account and
+    /// surface as that account's unavailable state only.
     private func fetchUsage(accountId: String) async -> SwitcherooAccountUsageState {
         do {
             let providerId = resolveSelectedProviderId()
@@ -185,8 +228,24 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
+    private func fetchUsageBatch(accountIds: [String], generation: Int) async {
+        await withTaskGroup(of: (String, SwitcherooAccountUsageState).self) { group in
+            for accountId in accountIds {
+                group.addTask { [weak self] in
+                    guard let self else { return (accountId, .unavailable(reason: nil)) }
+                    let state = await self.fetchUsage(accountId: accountId)
+                    return (accountId, state)
+                }
+            }
+            for await (accountId, state) in group {
+                self.publishUsage(accountId: accountId, generation: generation, state: state)
+            }
+        }
+    }
+
     /// Publishes a usage result only when it still belongs to the latest
-    /// request; older responses (rapid account switching) are dropped.
+    /// batch; older responses are dropped. Live views are notified so the open
+    /// dropdown updates in place.
     private func publishUsage(accountId: String, generation: Int, state: SwitcherooAccountUsageState) {
         lock.lock()
         guard generation == usageGeneration else {
@@ -194,7 +253,9 @@ public final class SwitcherooApp: @unchecked Sendable {
             return
         }
         self.state.usageStatesByAccountId[accountId] = state
+        usageInFlightByAccount[accountId] = nil
         lock.unlock()
+        onUsageUpdated?()
     }
 
     public func snapshot() -> SwitcherooAppState {

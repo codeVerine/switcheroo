@@ -68,7 +68,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 | Add account | Launch the official `codex login` flow in Terminal for another account. |
 | Keychain storage | Store inactive auth snapshots as generic password items in macOS Keychain. |
 | Snapshot refresh | Best-effort sync keeps known account snapshots fresh when Codex updates the active auth file. |
-| Usage display | Show the active account's remaining five-hour and weekly Codex allowance in the account dropdown. |
+| Usage display | Show every account's remaining five-hour and weekly Codex allowance in the account dropdown, refreshed per row. |
 | Optional CLI | Use `list`, `current`, `import-current`, `add`, `switch`, `sync`, and `delete` from Terminal. |
 
 ## Boundaries
@@ -78,7 +78,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 | Manage local auth snapshots for accounts you control. | Monitor live usage limits in real time or poll them in the background. |
 | Replace `~/.codex/auth.json` when you switch. | Refresh tokens itself. |
 | Use local parsing for display metadata such as expiry. | Call OpenAI model or platform APIs. |
-| Fetch the active account's remaining allowance from the read-only Codex usage endpoint. | Share accounts, pool credentials, or bypass terms of service. |
+| Fetch every account's remaining allowance from the read-only Codex usage endpoint, one credential per account. | Share accounts, pool credentials, or bypass terms of service. |
 | Keep account switching local to your Mac. | Work around service-wide Codex outages. |
 
 ## How It Works
@@ -86,7 +86,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 1. Each account’s Codex `auth.json` is stored as an opaque blob in macOS Keychain.
 2. “Switch” replaces the active `~/.codex/auth.json` atomically with the chosen snapshot.
 3. Best-effort sync keeps known account snapshots up to date when the current `auth.json` matches an existing account. The menu bar app polls only near token refresh time; the CLI syncs once per command.
-4. Usage display: while the menu bar is open, the app reads the active account's saved snapshot from Keychain, derives a bearer credential from it, and calls the read-only Codex usage endpoint for the five-hour and weekly remaining allowance. Results are kept in memory only, keyed by account, and never persisted.
+4. Usage display: while the menu bar is open, the app reads each saved account's snapshot from Keychain, derives a bearer credential from it, and calls the read-only Codex usage endpoint for that account's five-hour and weekly remaining allowance. Every row is fetched with its own credential; results are kept in memory only, keyed by account, updated live in the open dropdown, and never persisted.
 
 Docs:
 - [Usage](/docs/USAGE.md)

@@ -123,6 +123,7 @@ final class StubProvider: AgentProvider {
 
 final class MockSwitcherooApp: SwitcherooAppControlling {
     var state: SwitcherooAppState
+    var onUsageUpdated: (@Sendable () -> Void)?
 
     private(set) var refreshCalls = 0
     private(set) var startAddAccountNameCalls: [String] = []

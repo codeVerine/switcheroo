@@ -35,18 +35,16 @@ Menu bar app runs the login in Terminal via AppleScript (`osascript`). CLI runs 
 1. Load the Keychain blob for the account id.
 2. Atomically overwrite the active Codex auth file (default `~/.codex/auth.json`).
 3. Mark that account as active in config.
-4. Refresh usage for the newly active account (see Usage Display below).
+4. Refresh the menu state; per-row usage (see Usage Display below) already covers every account, so switching never shows another account's numbers.
 
 ### Usage Display
 
-1. On refresh, if the active account changed, any previous account's usage state is cleared immediately and a bounded loading state is published for the new active account.
-2. The app reads the active account's saved `auth.json` snapshot from Keychain (in memory only) and asks the Codex usage client for its five-hour and weekly remaining allowance.
-3. The Codex usage client sends one authenticated GET to the usage endpoint (`/wham/usage` on `chatgpt.com/backend-api`, or `/api/codex/usage` for Codex API style hosts) with `Authorization: Bearer <access token>` and, for ChatGPT logins, `ChatGPT-Account-ID`.
-4. The response reports consumption (`used_percent`) per window; the client derives remaining allowance as `clamp(100 − used, 0, 100)` and classifies windows by their reported duration (5h ≈ 18000s, weekly ≈ 604800s), falling back to primary/secondary position.
-5. Results are published only if the request still belongs to the latest selected account; slower responses from a previous account are dropped (latest-request-wins). Repeated refreshes are skipped while a fetch is in flight or when a result is under a minute old.
-6. Failures (auth, offline, rate limiting, malformed responses) become a recoverable `Usage unavailable` state with a secret-free reason; they never block the underlying account switch.
-
-The transport, endpoint URL, and clock are injected through the `CodexHTTPTransport` protocol, the `CodexAPIClient` base layer, and the usage fetcher's `now` closure, so all network behavior is testable without live requests.
+1. On refresh, Switcheroo plans a usage batch for every saved account: each row is skipped when it already has a fresh result (under a minute old) or when a same-generation fetch is already in flight, and is otherwise marked `.loading` synchronously. Removed accounts are pruned.
+2. Each account's saved `auth.json` snapshot is read from Keychain (in memory only) and used to authenticate one GET to the usage endpoint (`/wham/usage` on `chatgpt.com/backend-api`, or `/api/codex/usage` for Codex API style hosts) with `Authorization: Bearer <access token>` and, for ChatGPT logins, `ChatGPT-Account-ID`. Every account uses its own credential; results stay keyed by account id.
+3. The response reports consumption (`used_percent`) per window; the usage client derives remaining allowance as `clamp(100 − used, 0, 100)` and classifies windows by their reported duration (5h ≈ 18000s, weekly ≈ 604800s), falling back to primary/secondary position.
+4. Failures are isolated per account (auth, offline, rate limiting, malformed responses) and become that row's recoverable `Usage unavailable` state with a secret-free reason; other rows keep their own results.
+5. A batch bump of the generation token means slower older responses are dropped (latest-request-wins), and any still-loading superseded accounts fold into the new batch so no row gets stuck on `Checking usage…`.
+6. When results land, the app fires `onUsageUpdated` so the menu bar re-reads the snapshot and the open dropdown updates live; the transport, endpoint URL, and clock stay injectable (`CodexHTTPTransport`, `CodexAPIClient`, and the usage fetcher's `now` closure) for deterministic tests without live requests.
 
 ### Sync
 
