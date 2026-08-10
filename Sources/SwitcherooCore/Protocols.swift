@@ -29,6 +29,10 @@ public protocol SwitcherooFileIO {
     /// rename, fsync file and directory, then rename over the destination.
     func writeFileAtomically(_ data: Data, path: String, permissions: Int?) throws
     func replaceFileAtomically(_ data: Data, ifCurrentEquals expected: Data, path: String, permissions: Int?) throws -> Bool
+    /// Atomically remove a destination only when its bytes equal `expected`.
+    /// The destination may be absent briefly while a same-directory quarantine
+    /// rename is verified.
+    func removeFileAtomically(ifCurrentEquals expected: Data, path: String) throws -> Bool
     func removeItem(path: String) throws
     /// Create a directory; throws when it already exists (exclusive creation,
     /// used by the Pi-compatible lock protocol).

@@ -78,6 +78,42 @@ public struct FoundationFileIO: SwitcherooFileIO {
         return true
     }
 
+    public func removeFileAtomically(ifCurrentEquals expected: Data, path: String) throws -> Bool {
+        let url = url(forPath: path)
+        let directory = url.deletingLastPathComponent()
+
+        guard fileManager.fileExists(atPath: url.path),
+              try Data(contentsOf: url) == expected else {
+            return false
+        }
+
+        let quarantineURL = try createUniqueQuarantineURL(in: directory)
+        do {
+            try fileManager.moveItem(at: url, to: quarantineURL)
+            try fsyncDirectory(directory)
+
+            let quarantinedData = try Data(contentsOf: quarantineURL)
+            guard quarantinedData == expected else {
+                if !fileManager.fileExists(atPath: url.path) {
+                    try fileManager.moveItem(at: quarantineURL, to: url)
+                    try fsyncDirectory(directory)
+                }
+                return false
+            }
+
+            try fileManager.removeItem(at: quarantineURL)
+            try fsyncDirectory(directory)
+            return true
+        } catch {
+            if fileManager.fileExists(atPath: quarantineURL.path),
+               !fileManager.fileExists(atPath: url.path) {
+                try? fileManager.moveItem(at: quarantineURL, to: url)
+                try? fsyncDirectory(directory)
+            }
+            throw error
+        }
+    }
+
     public func removeItem(path: String) throws {
         let url = url(forPath: path)
         if fileManager.fileExists(atPath: url.path) {
@@ -175,6 +211,16 @@ public struct FoundationFileIO: SwitcherooFileIO {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Could not create temporary file in \(directory.path)"])
         }
         throw NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST), userInfo: [NSLocalizedDescriptionKey: "Could not create a unique temporary file in \(directory.path)"])
+    }
+
+    private func createUniqueQuarantineURL(in directory: URL) throws -> URL {
+        for _ in 0..<16 {
+            let quarantineURL = directory.appendingPathComponent(".switcheroo.\(UUID().uuidString).quarantine")
+            if !fileManager.fileExists(atPath: quarantineURL.path) {
+                return quarantineURL
+            }
+        }
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST), userInfo: [NSLocalizedDescriptionKey: "Could not create a unique quarantine path in \(directory.path)"])
     }
 
     private func applyPermissions(_ permissions: Int, to path: String) throws {

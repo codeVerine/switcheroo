@@ -66,16 +66,37 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
         XCTAssertEqual(fileIO.lockPaths, ["\(path).lock"])
     }
 
-    func testRestoreDestinationReportsConcurrentRecreationWhenPreviousWasAbsent() throws {
+    func testRestoreDestinationPreservesRecreationAfterAtomicRemoval() throws {
         let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
         let fileIO = InMemoryFileIO()
         let path = "/tmp/codex-auth.json"
         let expected = Data("expected".utf8)
         let concurrent = Data("concurrent".utf8)
         fileIO.files[path] = expected
-        fileIO.onRemovePath = { removedPath in
-            guard removedPath == path else { return }
-            fileIO.files[removedPath] = concurrent
+        fileIO.onAtomicRemoveMove = { movedPath, _ in
+            guard movedPath == path else { return }
+            fileIO.files[movedPath] = concurrent
+        }
+
+        XCTAssertTrue(adapter.restoreDestination(
+            previous: nil,
+            expectedCurrent: expected,
+            destinationPath: path,
+            fileIO: fileIO
+        ))
+        XCTAssertEqual(fileIO.files[path], concurrent)
+    }
+
+    func testRestoreDestinationReportsChangedBytesMovedToQuarantine() throws {
+        let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
+        let fileIO = InMemoryFileIO()
+        let path = "/tmp/codex-auth.json"
+        let expected = Data("expected".utf8)
+        let concurrent = Data("concurrent".utf8)
+        fileIO.files[path] = expected
+        fileIO.onBeforeAtomicRemove = { changedPath in
+            guard changedPath == path else { return }
+            fileIO.files[changedPath] = concurrent
         }
 
         XCTAssertFalse(adapter.restoreDestination(

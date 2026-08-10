@@ -77,9 +77,7 @@ public extension AuthTargetAdapter {
                 if let previous {
                     return try fileIO.replaceFileAtomically(previous, ifCurrentEquals: expectedCurrent, path: destinationPath, permissions: 0o600)
                 } else {
-                    guard try fileIO.readFile(path: destinationPath) == expectedCurrent else { return false }
-                    try fileIO.removeItem(path: destinationPath)
-                    return !fileIO.fileExists(path: destinationPath)
+                    return try fileIO.removeFileAtomically(ifCurrentEquals: expectedCurrent, path: destinationPath)
                 }
             }
         } catch {

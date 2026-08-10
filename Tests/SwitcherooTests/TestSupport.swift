@@ -127,7 +127,8 @@ final class InMemoryFileIO: SwitcherooFileIO {
     var failReadPaths: Set<String> = []
     /// Called after each successful write; lets tests simulate concurrent writers.
     var onWriteToPath: ((String) -> Void)?
-    var onRemovePath: ((String) -> Void)?
+    var onBeforeAtomicRemove: ((String) -> Void)?
+    var onAtomicRemoveMove: ((String, String) -> Void)?
 
     /// Destination writes excluding the internal transaction journal.
     var publishedWrites: [(path: String, data: Data, permissions: Int?)] {
@@ -180,6 +181,28 @@ final class InMemoryFileIO: SwitcherooFileIO {
         return true
     }
 
+    func removeFileAtomically(ifCurrentEquals expected: Data, path: String) throws -> Bool {
+        guard files[path] == expected else { return false }
+        onBeforeAtomicRemove?(path)
+
+        let quarantinePath = "\(path).switcheroo-quarantine.\(UUID().uuidString)"
+        guard let quarantinedData = files.removeValue(forKey: path) else { return false }
+        files[quarantinePath] = quarantinedData
+        onAtomicRemoveMove?(path, quarantinePath)
+
+        guard let quarantinedData = files[quarantinePath] else { return false }
+        guard quarantinedData == expected else {
+            if files[path] == nil {
+                files[path] = quarantinedData
+                files.removeValue(forKey: quarantinePath)
+            }
+            return false
+        }
+
+        files.removeValue(forKey: quarantinePath)
+        return true
+    }
+
     func removeItem(path: String) throws {
         guard !failRemovePaths.contains(path) else {
             throw NSError(domain: "TestSupport", code: 7, userInfo: [NSLocalizedDescriptionKey: "remove failed for test"])
@@ -188,7 +211,6 @@ final class InMemoryFileIO: SwitcherooFileIO {
         directories.remove(path)
         modificationDates.removeValue(forKey: path)
         removedPaths.append(path)
-        onRemovePath?(path)
     }
 
     func createDirectoryExclusive(path: String) throws {
