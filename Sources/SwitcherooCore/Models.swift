@@ -125,7 +125,7 @@ public struct SwitcherooProvider: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-public struct SwitcherooConfig: Codable, Sendable {
+public struct SwitcherooConfig: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     public var defaultProviderId: String?
     public var providers: [SwitcherooProvider]

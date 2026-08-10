@@ -86,6 +86,23 @@ public final class MacKeychainSecureStore: @unchecked Sendable, SwitcherooSecure
         }
     }
 
+    public func itemExists(key: String) throws -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        var item: CFTypeRef?
+        let status = client.copyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return false
+        }
+        guard status == errSecSuccess else {
+            throw SwitcherooError.secureStoreFailure(message: keychainMessage(prefix: "Keychain existence check failed", status: status))
+        }
+        return true
+    }
+
     private func update(_ data: Data, key: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

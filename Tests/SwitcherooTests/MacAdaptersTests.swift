@@ -145,6 +145,25 @@ final class MacAdaptersTests: XCTestCase {
         }
     }
 
+    func testMacKeychainSecureStorePropagatesExistenceCheckFailures() {
+        let store = MacKeychainSecureStore(
+            service: "com.switcheroo.tests.\(UUID().uuidString)",
+            client: MacKeychainClient(
+                addItem: { _, _ in errSecUnimplemented },
+                copyMatching: { _, _ in errSecAuthFailed },
+                updateItem: { _, _ in errSecUnimplemented },
+                deleteItem: { _ in errSecUnimplemented },
+                errorMessage: { _ in "test failure" }
+            )
+        )
+
+        XCTAssertThrowsError(try store.itemExists(key: "account")) { error in
+            guard case SwitcherooError.secureStoreFailure = error else {
+                return XCTFail("Expected secureStoreFailure, got \(error)")
+            }
+        }
+    }
+
     func testCodexLoginRunnerRunsFakeCodexExecutableInProcessTTY() throws {
         try withTemporaryExecutable(name: "codex", script: """
         #!/bin/sh

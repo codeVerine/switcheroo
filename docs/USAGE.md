@@ -20,11 +20,13 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 | Refresh | Reloads config and active status from disk, and refreshes every account row's usage if the last results are stale. |
 | Import logged-in account | Snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of duplicated. |
 | Add account | Launches the official `codex login` flow in Terminal for a new account. |
-| Switch | Makes that account's snapshot the active `~/.codex/auth.json` and starts one fresh usage generation covering every saved account. |
+| Switch | Makes that account's snapshot the active `~/.codex/auth.json`, synchronizes the same account into Pi's `openai-codex` entry, and starts one fresh usage generation covering every saved account. |
 | Delete | Removes the account entry and deletes the corresponding Keychain item. |
 
 > [!IMPORTANT]
 > For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
+
+For Pi reload behavior after a switch, see [Troubleshooting](./TROUBLESHOOTING.md).
 
 ## Usage Display
 
@@ -66,6 +68,7 @@ Notes:
 
 - `switcheroo add` runs `codex login` with a per-account provider home so Codex writes a fresh `auth.json` for that login. Switcheroo then imports that snapshot, refreshes an existing matching account if found, and deletes the temporary provider home directory.
 - `switcheroo sync` is best-effort; it does not “refresh” tokens itself. It only re-saves the current `auth.json` when it matches an existing Switcheroo account. It will not create accounts in the background.
+- `switcheroo switch` synchronizes the selected account into Pi’s auth file as well. If that synchronization fails (for example, the configured Pi auth file is malformed), the switch is rolled back and an error is printed; fix or remove the broken file, then switch again. Token contents never appear in error output.
 
 ## When To Use Switcheroo
 

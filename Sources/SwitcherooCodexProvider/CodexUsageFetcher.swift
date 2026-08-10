@@ -113,13 +113,18 @@ public struct CodexUsageFetcher: AccountUsageFetching {
             return mapWindow(secondary)
         }
         // Duration unknown: trust the position the backend reported.
-        if primaryIsPreferred, let primary = windows.primary {
+        if primaryIsPreferred, let primary = windows.primary, !hasKnownDuration(primary) {
             return mapWindow(primary)
         }
-        if !primaryIsPreferred, let secondary = windows.secondary {
+        if !primaryIsPreferred, let secondary = windows.secondary, !hasKnownDuration(secondary) {
             return mapWindow(secondary)
         }
         return nil
+    }
+
+    private static func hasKnownDuration(_ window: RateLimitWindowSnapshot) -> Bool {
+        guard let reported = window.limitWindowSeconds else { return false }
+        return reported > 0
     }
 
     private static func matchesDuration(_ window: RateLimitWindowSnapshot, seconds: Int) -> Bool {

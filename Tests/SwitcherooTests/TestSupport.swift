@@ -1,10 +1,12 @@
 import Foundation
+import SwitcherooCodexProvider
 import SwitcherooCore
 import SwitcherooPresentation
 
 final class InMemoryConfigStore: SwitcherooConfigStoring {
     var config: SwitcherooConfig
     private(set) var savedConfigs: [SwitcherooConfig] = []
+    var failSaves = false
 
     init(config: SwitcherooConfig = SwitcherooConfig()) {
         self.config = config
@@ -15,6 +17,9 @@ final class InMemoryConfigStore: SwitcherooConfigStoring {
     }
 
     func save(_ config: SwitcherooConfig) throws {
+        if failSaves {
+            throw NSError(domain: "TestSupport", code: 3, userInfo: [NSLocalizedDescriptionKey: "config save failed for test"])
+        }
         self.config = config
         savedConfigs.append(config)
     }
@@ -22,47 +27,69 @@ final class InMemoryConfigStore: SwitcherooConfigStoring {
 
 final class InMemorySecureStore: SwitcherooSecureStoring, @unchecked Sendable {
     private let lock = NSLock()
-    private var items: [String: Data] = [:]
-    private var storedKeys: [String] = []
-    private var loadedKeys: [String] = []
-    private var deletedKeys: [String] = []
+    private var storage: [String: Data] = [:]
+    private var storedKeysList: [String] = []
+    private var loadedKeysList: [String] = []
+    private var deletedKeysList: [String] = []
+    var failLoadKeys: Set<String> = []
+    var failStoreKeys: Set<String> = []
+    var failDeleteKeys: Set<String> = []
 
     var allItems: [String: Data] {
         lock.lock()
         defer { lock.unlock() }
-        return items
+        return storage
+    }
+
+    var items: [String: Data] {
+        get { allItems }
+        set {
+            lock.lock()
+            storage = newValue
+            lock.unlock()
+        }
     }
 
     var recordedStoredKeys: [String] {
         lock.lock()
         defer { lock.unlock() }
-        return storedKeys
+        return storedKeysList
     }
 
     var recordedLoadedKeys: [String] {
         lock.lock()
         defer { lock.unlock() }
-        return loadedKeys
+        return loadedKeysList
     }
 
     var recordedDeletedKeys: [String] {
         lock.lock()
         defer { lock.unlock() }
-        return deletedKeys
+        return deletedKeysList
     }
 
+    var storedKeys: [String] { recordedStoredKeys }
+    var loadedKeys: [String] { recordedLoadedKeys }
+    var deletedKeys: [String] { recordedDeletedKeys }
+
     func store(_ data: Data, key: String) throws {
+        guard !failStoreKeys.contains(key) else {
+            throw NSError(domain: "TestSupport", code: 4, userInfo: [NSLocalizedDescriptionKey: "keychain store failed for test"])
+        }
         lock.lock()
-        items[key] = data
-        storedKeys.append(key)
+        storage[key] = data
+        storedKeysList.append(key)
         lock.unlock()
     }
 
     func load(key: String) throws -> Data {
         lock.lock()
-        loadedKeys.append(key)
-        let data = items[key]
+        loadedKeysList.append(key)
+        let data = storage[key]
         lock.unlock()
+        guard !failLoadKeys.contains(key) else {
+            throw NSError(domain: "TestSupport", code: 5, userInfo: [NSLocalizedDescriptionKey: "keychain load failed for test"])
+        }
         guard let data else {
             throw SwitcherooError.secureStoreItemMissing
         }
@@ -70,24 +97,67 @@ final class InMemorySecureStore: SwitcherooSecureStoring, @unchecked Sendable {
     }
 
     func delete(key: String) throws {
+        guard !failDeleteKeys.contains(key) else {
+            throw NSError(domain: "TestSupport", code: 6, userInfo: [NSLocalizedDescriptionKey: "keychain delete failed for test"])
+        }
         lock.lock()
-        items.removeValue(forKey: key)
-        deletedKeys.append(key)
+        storage.removeValue(forKey: key)
+        deletedKeysList.append(key)
         lock.unlock()
     }
-}
 
+    func itemExists(key: String) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage[key] != nil
+    }
+}
 final class InMemoryFileIO: SwitcherooFileIO {
     var files: [String: Data] = [:]
+    var directories: Set<String> = []
+    var modificationDates: [String: Date] = [:]
+    private let modificationDatesLock = NSLock()
     private(set) var readPaths: [String] = []
     private(set) var writes: [(path: String, data: Data, permissions: Int?)] = []
+    private(set) var removedPaths: [String] = []
+    private(set) var createdDirectories: [String] = []
+    private(set) var lockPaths: [String] = []
+    var failWritePaths: Set<String> = []
+    var failAfterWriteOncePaths: Set<String> = []
+    var failRemovePaths: Set<String> = []
+    var failReadPaths: Set<String> = []
+    /// Called after each successful write; lets tests simulate concurrent writers.
+    var onWriteToPath: ((String) -> Void)?
+    var onBeforeAtomicRemove: ((String) -> Void)?
+    var onAtomicRemoveMove: ((String, String) -> Void)?
+
+    /// Destination writes excluding the internal transaction journal.
+    var publishedWrites: [(path: String, data: Data, permissions: Int?)] {
+        writes.filter { !$0.path.hasSuffix("/state/transaction.json") }
+    }
+
+    /// Cross-instance lock registry so separate harnesses serialize like
+    /// separate processes sharing a filesystem.
+    private static let registry = LockRegistry()
+
+    private final class LockRegistry: @unchecked Sendable {
+        let mutex = NSLock()
+        var heldLocks: Set<String> = []
+    }
 
     func fileExists(path: String) -> Bool {
         files[path] != nil
     }
 
+    func itemExists(path: String) -> Bool {
+        files[path] != nil || directories.contains(path)
+    }
+
     func readFile(path: String) throws -> Data {
         readPaths.append(path)
+        guard !failReadPaths.contains(path) else {
+            throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "read failed for test"])
+        }
         guard let data = files[path] else {
             throw SwitcherooError.missingAuthFile(path: path)
         }
@@ -95,8 +165,116 @@ final class InMemoryFileIO: SwitcherooFileIO {
     }
 
     func writeFileAtomically(_ data: Data, path: String, permissions: Int?) throws {
+        guard !failWritePaths.contains(path) else {
+            throw NSError(domain: "TestSupport", code: 2, userInfo: [NSLocalizedDescriptionKey: "write failed for test"])
+        }
         files[path] = data
         writes.append((path: path, data: data, permissions: permissions))
+        onWriteToPath?(path)
+        if failAfterWriteOncePaths.remove(path) != nil {
+            throw NSError(domain: "TestSupport", code: 8, userInfo: [NSLocalizedDescriptionKey: "write durability failed for test"])
+        }
+    }
+
+    func replaceFileAtomically(_ data: Data, ifCurrentEquals expected: Data, path: String, permissions: Int?) throws -> Bool {
+        guard files[path] == expected else { return false }
+        try writeFileAtomically(data, path: path, permissions: permissions)
+        return true
+    }
+
+    func removeFileAtomically(ifCurrentEquals expected: Data, path: String, quarantinePath: String) throws -> Bool {
+        guard files[path] == expected else { return false }
+        onBeforeAtomicRemove?(path)
+
+        guard files[quarantinePath] == nil else { return false }
+        guard let quarantinedData = files.removeValue(forKey: path) else { return false }
+        files[quarantinePath] = quarantinedData
+        onAtomicRemoveMove?(path, quarantinePath)
+
+        guard let quarantinedData = files[quarantinePath] else { return false }
+        guard quarantinedData == expected else {
+            if files[path] == nil {
+                files[path] = quarantinedData
+                files.removeValue(forKey: quarantinePath)
+            }
+            return false
+        }
+
+        files.removeValue(forKey: quarantinePath)
+        return true
+    }
+
+    func moveItemAtomically(from sourcePath: String, to destinationPath: String) throws {
+        guard let data = files[sourcePath], files[destinationPath] == nil else {
+            throw NSError(domain: "TestSupport", code: 9, userInfo: [NSLocalizedDescriptionKey: "atomic move failed for test"])
+        }
+        files.removeValue(forKey: sourcePath)
+        files[destinationPath] = data
+    }
+
+    func removeItem(path: String) throws {
+        guard !failRemovePaths.contains(path) else {
+            throw NSError(domain: "TestSupport", code: 7, userInfo: [NSLocalizedDescriptionKey: "remove failed for test"])
+        }
+        files.removeValue(forKey: path)
+        directories.remove(path)
+        modificationDatesLock.lock()
+        modificationDates.removeValue(forKey: path)
+        modificationDatesLock.unlock()
+        removedPaths.append(path)
+    }
+
+    func createDirectoryExclusive(path: String) throws {
+        if itemExists(path: path) {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError, userInfo: [NSLocalizedDescriptionKey: "directory exists"])
+        }
+        directories.insert(path)
+        modificationDatesLock.lock()
+        modificationDates[path] = Date()
+        modificationDatesLock.unlock()
+        createdDirectories.append(path)
+    }
+
+    func createDirectory(path: String, withIntermediateDirectories: Bool) throws {
+        directories.insert(path)
+        createdDirectories.append(path)
+    }
+
+    func modificationDate(path: String) -> Date? {
+        modificationDatesLock.lock()
+        defer { modificationDatesLock.unlock() }
+        return modificationDates[path]
+    }
+
+    func setModificationDate(path: String, date: Date) throws {
+        modificationDatesLock.lock()
+        defer { modificationDatesLock.unlock() }
+        modificationDates[path] = date
+    }
+
+    func canonicalDestinationPath(_ path: String) -> String {
+        // In-memory store has no symlinks; identical spellings already compare
+        // equal, so the identity mapping keeps fixture keys stable.
+        path
+    }
+
+    func withExclusiveLock<T>(path: String, _ body: () throws -> T) throws -> T {
+        lockPaths.append(path)
+        while true {
+            Self.registry.mutex.lock()
+            if !Self.registry.heldLocks.contains(path) {
+                Self.registry.heldLocks.insert(path)
+                Self.registry.mutex.unlock()
+                defer {
+                    Self.registry.mutex.lock()
+                    Self.registry.heldLocks.remove(path)
+                    Self.registry.mutex.unlock()
+                }
+                return try body()
+            }
+            Self.registry.mutex.unlock()
+            Thread.sleep(forTimeInterval: 0.001)
+        }
     }
 }
 
@@ -114,6 +292,10 @@ final class InMemoryPaths: SwitcherooPaths {
 
     func removeItem(path: String) throws {
         removedPaths.append(path)
+    }
+
+    func stateDirectoryPath() throws -> String {
+        "\(rootPath)/state"
     }
 }
 
@@ -178,6 +360,7 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     var nextSnapshot: SwitcherooAppState?
     var forceDerivedImportToReturnNil = false
     var forceDerivedFinalizeToReturnNil = false
+    var switchError: Error?
     var nextSyncResult = SwitcherooActiveSnapshotSyncResult(
         disposition: .updatedExisting,
         account: nil,
@@ -272,8 +455,11 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
         return SwitcherooAccountWriteResult(disposition: nextFinalizedDisposition, account: account)
     }
 
-    func switchToAccount(idOrName: String) {
+    func switchToAccount(idOrName: String) throws {
         switchCalls.append(idOrName)
+        if let switchError {
+            throw switchError
+        }
         guard let account = state.accounts.first(where: { $0.id == idOrName || $0.name == idOrName }) else {
             return
         }
@@ -339,8 +525,6 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     }
 }
 
-/// Test double for live account-usage fetching. Handlers are registered per
-/// account id; an optional per-account delay simulates slow responses.
 final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
     private let lock = NSLock()
     private var handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage]
@@ -426,30 +610,119 @@ final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
     }
 }
 
+final class StubAuthTargetAdapter: @unchecked Sendable, AuthTargetAdapter {
+    enum WriteMode {
+        /// Destination becomes exactly the source snapshot (Codex semantics).
+        case replaceWithSource
+        /// Destination keeps every unrelated top-level entry and replaces one key.
+        case upsertKey(String)
+    }
+
+    let id: String
+    let displayName: String
+    let defaultDestinationAuthFilePath: String
+    let convertedValue: AuthTargetJSON
+    var writeMode: WriteMode
+    var conversionError: Error?
+    var documentError: Error?
+    private(set) var conversionCalls = 0
+    private(set) var documentCalls = 0
+    private(set) var validationCalls = 0
+
+    init(
+        id: String = "stub-target",
+        displayName: String = "Stub Target",
+        defaultDestinationAuthFilePath: String = "~/.stub-target/auth.json",
+        destinationKey: String = "stub-credential",
+        convertedValue: AuthTargetJSON = .object(["marker": .string("stub")]),
+        writeMode: WriteMode = .upsertKey("stub-credential")
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.defaultDestinationAuthFilePath = defaultDestinationAuthFilePath
+        self.convertedValue = convertedValue
+        self.writeMode = writeMode
+    }
+
+    func destinationAuthFilePath(forProviderState providerState: SwitcherooProvider) -> String {
+        defaultDestinationAuthFilePath
+    }
+
+    func convertedCredential(fromSourceAuthData sourceAuthData: Data) throws -> AuthTargetCredential? {
+        conversionCalls += 1
+        if let conversionError {
+            throw conversionError
+        }
+        switch writeMode {
+        case .replaceWithSource:
+            return nil
+        case .upsertKey(let key):
+            return AuthTargetCredential(destinationKey: key, jsonValue: convertedValue)
+        }
+    }
+
+    func validateExistingDestination(existingDestinationData: Data?, destinationPath: String) throws {
+        validationCalls += 1
+    }
+
+    func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult {
+        documentCalls += 1
+        if let documentError {
+            throw documentError
+        }
+        switch writeMode {
+        case .replaceWithSource:
+            let existing = fileIO.fileExists(path: destinationPath) ? try fileIO.readFile(path: destinationPath) : nil
+            if existing == sourceAuthData {
+                return AuthTargetWriteResult(previousData: existing, writtenData: sourceAuthData)
+            }
+            try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
+            return AuthTargetWriteResult(previousData: existing, writtenData: sourceAuthData)
+        case .upsertKey(let key):
+            guard let credential else {
+                throw AuthTargetSyncError.unsupportedSource(targetId: id, reason: "missing converted credential")
+            }
+            let existing = fileIO.fileExists(path: destinationPath) ? try fileIO.readFile(path: destinationPath) : nil
+            let merged = try AuthTargetDocument.merging(credential, into: existing, targetId: id, destinationPath: destinationPath)
+            try fileIO.writeFileAtomically(merged, path: destinationPath, permissions: 0o600)
+            return AuthTargetWriteResult(previousData: existing, writtenData: merged)
+        }
+    }
+}
+
 struct EngineHarness {
     let configStore: InMemoryConfigStore
     let secureStore: InMemorySecureStore
     let fileIO: InMemoryFileIO
     let paths: InMemoryPaths
     let provider: StubProvider
+    let authTargetAdapters: [any AuthTargetAdapter]
     let engine: SwitcherooEngine
 
     init(
         config: SwitcherooConfig = SwitcherooConfig(),
         provider: StubProvider = StubProvider(),
-        rootPath: String = "/tmp/switcheroo-tests"
+        rootPath: String = "/tmp/switcheroo-tests",
+        includeCodexTarget: Bool = true,
+        authTargetAdapters: [any AuthTargetAdapter] = []
     ) throws {
         self.configStore = InMemoryConfigStore(config: config)
         self.secureStore = InMemorySecureStore()
         self.fileIO = InMemoryFileIO()
         self.paths = InMemoryPaths(rootPath: rootPath)
         self.provider = provider
+        var adapters = authTargetAdapters
+        if includeCodexTarget {
+            adapters.insert(CodexAuthTargetAdapter(defaultAuthFilePath: provider.defaultActiveAuthFilePath), at: 0)
+        }
+        self.authTargetAdapters = adapters
         self.engine = try SwitcherooEngine(
             configStore: configStore,
             secureStore: secureStore,
             fileIO: fileIO,
             paths: paths,
-            providers: [provider]
+            providers: [provider],
+            authTargetAdapters: adapters
         )
     }
 
@@ -507,10 +780,32 @@ func makeAuthData(
     return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
 }
 
-func makeCodexAuthData(accessToken: String = "test-access-token", accountId: String? = "acct-1") throws -> Data {
-    var tokens: [String: Any] = ["access_token": accessToken]
+/// Codex-style auth.json with the OAuth fields auth-target adapters consume:
+/// a JWT access token carrying `exp` and the `chatgpt_account_id` claim (the
+/// claim Pi itself validates), a refresh token, and an id_token carrying the
+/// same account claim. `accountId` matches the usage-fetching fixture shape;
+/// `tokensAccountId` overrides it for auth-target fixtures.
+func makeCodexAuthData(
+    accessToken: String? = nil,
+    accountId: String? = nil,
+    refreshToken: String? = nil,
+    idToken: String? = nil,
+    tokensAccountId: String? = nil
+) throws -> Data {
+    var tokens: [String: Any] = [:]
+    tokens["access_token"] = accessToken ?? makeJWT(payload: [
+        "exp": 1_700_000_000,
+        "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+    ])
+    tokens["refresh_token"] = refreshToken ?? "test-refresh-token"
+    tokens["id_token"] = idToken ?? makeJWT(payload: [
+        "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+    ])
     if let accountId {
         tokens["account_id"] = accountId
+    }
+    if let tokensAccountId {
+        tokens["account_id"] = tokensAccountId
     }
     return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
 }

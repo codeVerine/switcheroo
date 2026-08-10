@@ -84,6 +84,48 @@ final class CodexAPIClientTests: XCTestCase {
         XCTAssertEqual(request.url.absoluteString, "https://api.openai.com/api/codex/usage")
     }
 
+    func testEndpointURLNormalizesTrailingSlashAndRejectsComponents() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 200, body: Data("{}".utf8))
+        let client = makeClient(
+            baseURL: URL(string: "https://example.test/backend-api/")!,
+            style: .chatgpt,
+            transport: transport
+        )
+
+        _ = try await client.get(path: "/usage", credential: credential)
+        XCTAssertEqual(transport.requests.first?.url.absoluteString, "https://example.test/backend-api/wham/usage")
+
+        let invalidClient = makeClient(
+            baseURL: URL(string: "https://example.test/backend-api?unsafe=true")!,
+            style: .chatgpt,
+            transport: transport
+        )
+        do {
+            _ = try await invalidClient.get(path: "usage", credential: credential)
+            XCTFail("expected invalidRequest")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .invalidRequest)
+        }
+    }
+
+    func testEndpointURLRejectsCleartextAuthenticatedRequests() async throws {
+        let transport = MockCodexHTTPTransport()
+        let client = makeClient(
+            baseURL: URL(string: "http://example.test/backend-api")!,
+            style: .chatgpt,
+            transport: transport
+        )
+
+        do {
+            _ = try await client.get(path: "usage", credential: credential)
+            XCTFail("expected invalidRequest")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .invalidRequest)
+        }
+        XCTAssertTrue(transport.requests.isEmpty)
+    }
+
     func testAccountIdHeaderOmittedWhenCredentialHasNoAccountId() async throws {
         let transport = MockCodexHTTPTransport()
         transport.setResponse(status: 200, body: Data("{}".utf8))
@@ -397,6 +439,18 @@ final class CodexUsageFetcherTests: XCTestCase {
         XCTAssertEqual(usage.weekly?.usedPercent, 22)
         XCTAssertEqual(usage.fiveHour?.windowSeconds, 0)
         XCTAssertNil(usage.weekly?.windowSeconds)
+    }
+
+    func testKnownMismatchedDurationDoesNotUsePositionalFallback() async throws {
+        transport.setResponse(
+            status: 200,
+            body: payload(primaryUsed: 11, primarySeconds: 604_800, secondaryUsed: 22, secondarySeconds: nil)
+        )
+
+        let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+
+        XCTAssertNil(usage.fiveHour)
+        XCTAssertEqual(usage.weekly?.usedPercent, 11)
     }
 
     func testEmptyRateLimitPayloadThrowsMalformedResponse() async {

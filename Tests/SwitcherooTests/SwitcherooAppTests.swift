@@ -1,5 +1,6 @@
 import XCTest
 import SwitcherooCore
+import SwitcherooPiAdapter
 import SwitcherooPresentation
 
 final class SwitcherooAppTests: XCTestCase {
@@ -50,11 +51,11 @@ final class SwitcherooAppTests: XCTestCase {
         XCTAssertEqual(added.name, "Work")
         XCTAssertEqual(app.state.activeAccountId, added.id)
         XCTAssertNil(app.state.pendingLogin)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
 
-        app.switchToAccount(idOrName: added.id.prefix(6).description)
+        try app.switchToAccount(idOrName: added.id.prefix(6).description)
         XCTAssertEqual(app.state.activeAccountId, added.id)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
 
         app.renameAccount(accountId: added.id, newName: "Renamed")
         XCTAssertEqual(app.state.accounts.first?.name, "Renamed")
@@ -152,8 +153,8 @@ final class SwitcherooAppTests: XCTestCase {
         XCTAssertEqual(result.disposition, .created)
         let added = try XCTUnwrap(result.account)
         XCTAssertEqual(app.state.activeAccountId, added.id)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
-        XCTAssertEqual(harness.fileIO.writes.last?.data, authData)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.data, authData)
     }
 
     func testSelectProviderUpdatesSelectionAndStillRefreshesState() throws {
@@ -177,5 +178,94 @@ final class SwitcherooAppTests: XCTestCase {
         ])
 
         XCTAssertTrue(app.shouldShowProviderUI())
+    }
+
+    func testSwitchSynchronizesPiAuthFile() throws {
+        let activePath = "/tmp/active/auth.json"
+        let piPath = "~/.pi/agent/auth.json"
+        let first = makeAccount(id: "acc-first", name: "First")
+        let second = makeAccount(id: "acc-second", name: "Second")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: first.id,
+                    accounts: [first, second],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config, authTargetAdapters: [PiAuthTargetAdapter()])
+        let firstAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
+            refreshToken: "refresh-first",
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
+            tokensAccountId: "acct-first"
+        )
+        let secondAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_200, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
+            refreshToken: "refresh-second",
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
+            tokensAccountId: "acct-second"
+        )
+        harness.secureStore.items["codex:\(first.id)"] = firstAuth
+        harness.secureStore.items["codex:\(second.id)"] = secondAuth
+        harness.fileIO.files[activePath] = firstAuth
+        let app = harness.makeApp()
+
+        try app.switchToAccount(idOrName: "acc-second")
+
+        XCTAssertNil(app.state.errorMessage)
+        XCTAssertEqual(app.state.activeAccountId, second.id)
+        let piDoc = try XCTUnwrap(JSONSerialization.jsonObject(with: harness.fileIO.files[piPath]!) as? [String: Any])
+        let codex = try XCTUnwrap(piDoc["openai-codex"] as? [String: Any])
+        XCTAssertEqual(codex["refresh"] as? String, "refresh-second")
+    }
+
+    func testSwitchSurfacesPiSyncFailureAndRollsBack() throws {
+        let activePath = "/tmp/active/auth.json"
+        let piPath = "~/.pi/agent/auth.json"
+        let first = makeAccount(id: "acc-first", name: "First")
+        let second = makeAccount(id: "acc-second", name: "Second")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [
+                makeProviderState(
+                    id: "codex",
+                    activeAccountId: first.id,
+                    accounts: [first, second],
+                    activeAuthFilePathOverride: activePath
+                ),
+            ]
+        )
+        let harness = try EngineHarness(config: config, authTargetAdapters: [PiAuthTargetAdapter()])
+        let firstAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
+            refreshToken: "refresh-first",
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
+            tokensAccountId: "acct-first"
+        )
+        let secondAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_200, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
+            refreshToken: "refresh-second",
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
+            tokensAccountId: "acct-second"
+        )
+        harness.secureStore.items["codex:\(first.id)"] = firstAuth
+        harness.secureStore.items["codex:\(second.id)"] = secondAuth
+        harness.fileIO.files[activePath] = firstAuth
+        harness.fileIO.files[piPath] = Data("broken json".utf8)
+        let app = harness.makeApp()
+
+        XCTAssertThrowsError(try app.switchToAccount(idOrName: "acc-second"))
+
+        let message = try XCTUnwrap(app.state.errorMessage)
+        XCTAssertTrue(message.contains("Could not sync pi"))
+        XCTAssertFalse(message.contains("refresh-second"))
+        // The switch was rolled back: the active codex file still holds the first account.
+        XCTAssertEqual(harness.fileIO.files[activePath], firstAuth)
+        app.refresh()
+        XCTAssertEqual(app.state.activeAccountId, first.id)
     }
 }

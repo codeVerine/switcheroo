@@ -19,7 +19,7 @@ public protocol SwitcherooAppControlling: AnyObject {
     @discardableResult func finalizePendingIfReady(setActive: Bool) -> SwitcherooAccountWriteResult?
     @discardableResult func finalizePendingIfReady(setActiveIfFirst: Bool) -> SwitcherooAccountWriteResult?
 
-    func switchToAccount(idOrName: String)
+    func switchToAccount(idOrName: String) throws
     func deleteAccount(idOrName: String)
     @discardableResult func syncActiveSnapshot() -> SwitcherooActiveSnapshotSyncResult?
     func autoSyncDecision(now: Date) -> SwitcherooAutoSyncDecision

@@ -22,6 +22,14 @@ public struct MacPaths: SwitcherooPaths {
             .path
     }
 
+    public func stateDirectoryPath() throws -> String {
+        let appSupport = try fileManager.applicationSupportDirectoryURL()
+        return appSupport
+            .appendingPathComponent("Switcheroo", isDirectory: true)
+            .appendingPathComponent("state", isDirectory: true)
+            .path
+    }
+
     public func removeItem(path: String) throws {
         let expanded = (path as NSString).expandingTildeInPath
         try? fileManager.removeItem(atPath: expanded)

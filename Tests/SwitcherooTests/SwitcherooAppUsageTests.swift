@@ -219,7 +219,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
 
         // The switch must start a second all-account generation even though
         // every row is still inside the one-minute freshness cache.
-        app.switchToAccount(idOrName: "acc-2")
+        try app.switchToAccount(idOrName: "acc-2")
 
         let snapshot = app.snapshot()
         XCTAssertEqual(snapshot.activeAccountId, "acc-2")
@@ -359,7 +359,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
         XCTAssertEqual(loaded.accountId, "acc-2")
 
-        app.switchToAccount(idOrName: "acc-2")
+        try app.switchToAccount(idOrName: "acc-2")
         let switched = await waitForTerminalState(app, accountId: "acc-2")
         guard case .loaded = switched else {
             return XCTFail("switch must still succeed after a usage failure, got \(switched)")
