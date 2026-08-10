@@ -542,6 +542,22 @@ final class CodexUsageFetcherTests: XCTestCase {
         XCTAssertEqual(usage.weekly?.windowSeconds, 604_800)
     }
 
+    func testLoneSecondaryWithUnrecognizedDurationLandsInWeekly() async throws {
+        // Positional fallback must respect the primary/secondary convention:
+        // a lone secondary window with no matching duration goes to weekly.
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "plan_type": "pro",
+            "rate_limit": [
+                "secondary_window": ["used_percent": 55, "limit_window_seconds": 999],
+            ],
+        ])
+        transport.setResponse(status: 200, body: payload)
+        let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+
+        XCTAssertNil(usage.fiveHour, "a lone secondary window must not fill the five-hour slot")
+        XCTAssertEqual(usage.weekly?.usedPercent, 55)
+    }
+
     func testInvalidResponseFromTransportMapsToMalformedResponse() async {
         transport.setError(CodexAPIClientError.invalidResponse)
         do {

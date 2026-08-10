@@ -87,8 +87,9 @@ public struct CodexUsageFetcher: AccountUsageFetching {
     /// Classifies both result windows in a single pass so a source snapshot can
     /// never populate both outputs. Exact duration matches (5h ≈ 18000s,
     /// weekly ≈ 604800s, ±5%) are assigned first and their source is marked
-    /// consumed; positional fallback (primary → five-hour, secondary → weekly)
-    /// only applies to outputs left unassigned by still-unconsumed sources.
+    /// consumed; positional fallback then applies only per output and per
+    /// position (primary → five-hour, secondary → weekly), so a lone secondary
+    /// window with an unrecognized duration lands in weekly, never in five-hour.
     private static func classifyWindows(
         primary: RateLimitWindowSnapshot?,
         secondary: RateLimitWindowSnapshot?
@@ -116,17 +117,10 @@ public struct CodexUsageFetcher: AccountUsageFetching {
         if fiveHour == nil, let primary, !consumedPrimary {
             fiveHour = mapWindow(primary)
             consumedPrimary = true
-        } else if fiveHour == nil, let secondary, !consumedSecondary {
-            fiveHour = mapWindow(secondary)
-            consumedSecondary = true
         }
-
         if weekly == nil, let secondary, !consumedSecondary {
             weekly = mapWindow(secondary)
             consumedSecondary = true
-        } else if weekly == nil, let primary, !consumedPrimary {
-            weekly = mapWindow(primary)
-            consumedPrimary = true
         }
 
         return (fiveHour, weekly)
