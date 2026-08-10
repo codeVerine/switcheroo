@@ -70,61 +70,66 @@ public struct CodexUsageFetcher: AccountUsageFetching {
     }
 
     func map(payload: RateLimitStatusPayload, accountId: String) -> SwitcherooAccountUsage {
-        let rateLimit = payload.rateLimit
-
-        let fiveHour = Self.classifiedWindow(
-            windows: (
-                primary: rateLimit?.primaryWindow,
-                secondary: rateLimit?.secondaryWindow
-            ),
-            preferredSeconds: Self.fiveHourSeconds,
-            primaryIsPreferred: true
-        )
-        let weekly = Self.classifiedWindow(
-            windows: (
-                primary: rateLimit?.primaryWindow,
-                secondary: rateLimit?.secondaryWindow
-            ),
-            preferredSeconds: Self.weeklySeconds,
-            primaryIsPreferred: false
+        let windows = Self.classifyWindows(
+            primary: payload.rateLimit?.primaryWindow,
+            secondary: payload.rateLimit?.secondaryWindow
         )
 
         return SwitcherooAccountUsage(
             accountId: accountId,
-            fiveHour: fiveHour,
-            weekly: weekly,
+            fiveHour: windows.fiveHour,
+            weekly: windows.weekly,
             planType: payload.planType,
             fetchedAt: now()
         )
     }
 
-    /// Maps a backend window snapshot to a usage window, preferring the window
-    /// whose reported duration matches `preferredSeconds` and falling back to
-    /// the primary/secondary position when duration is unknown.
-    private static func classifiedWindow(
-        windows: (primary: RateLimitWindowSnapshot?, secondary: RateLimitWindowSnapshot?),
-        preferredSeconds: Int,
-        primaryIsPreferred: Bool
-    ) -> SwitcherooUsageWindow? {
-        if let primary = windows.primary, matchesDuration(primary, seconds: preferredSeconds) {
-            return mapWindow(primary)
-        }
-        if let secondary = windows.secondary, matchesDuration(secondary, seconds: preferredSeconds) {
-            return mapWindow(secondary)
-        }
-        // Duration unknown: trust the position the backend reported.
-        if primaryIsPreferred, let primary = windows.primary, !hasKnownDuration(primary) {
-            return mapWindow(primary)
-        }
-        if !primaryIsPreferred, let secondary = windows.secondary, !hasKnownDuration(secondary) {
-            return mapWindow(secondary)
-        }
-        return nil
-    }
+    /// Classifies both result windows in a single pass so a source snapshot can
+    /// never populate both outputs. Exact duration matches (5h ≈ 18000s,
+    /// weekly ≈ 604800s, ±5%) are assigned first and their source is marked
+    /// consumed; positional fallback (primary → five-hour, secondary → weekly)
+    /// only applies to outputs left unassigned by still-unconsumed sources.
+    private static func classifyWindows(
+        primary: RateLimitWindowSnapshot?,
+        secondary: RateLimitWindowSnapshot?
+    ) -> (fiveHour: SwitcherooUsageWindow?, weekly: SwitcherooUsageWindow?) {
+        var consumedPrimary = false
+        var consumedSecondary = false
+        var fiveHour: SwitcherooUsageWindow?
+        var weekly: SwitcherooUsageWindow?
 
-    private static func hasKnownDuration(_ window: RateLimitWindowSnapshot) -> Bool {
-        guard let reported = window.limitWindowSeconds else { return false }
-        return reported > 0
+        if let primary, !consumedPrimary, matchesDuration(primary, seconds: fiveHourSeconds) {
+            fiveHour = mapWindow(primary)
+            consumedPrimary = true
+        } else if let secondary, !consumedSecondary, matchesDuration(secondary, seconds: fiveHourSeconds) {
+            fiveHour = mapWindow(secondary)
+            consumedSecondary = true
+        }
+
+        if let secondary, !consumedSecondary, matchesDuration(secondary, seconds: weeklySeconds) {
+            weekly = mapWindow(secondary)
+            consumedSecondary = true
+        } else if let primary, !consumedPrimary, matchesDuration(primary, seconds: weeklySeconds) {
+            weekly = mapWindow(primary)
+            consumedPrimary = true
+        }
+        if fiveHour == nil, let primary, !consumedPrimary {
+            fiveHour = mapWindow(primary)
+            consumedPrimary = true
+        } else if fiveHour == nil, let secondary, !consumedSecondary {
+            fiveHour = mapWindow(secondary)
+            consumedSecondary = true
+        }
+
+        if weekly == nil, let secondary, !consumedSecondary {
+            weekly = mapWindow(secondary)
+            consumedSecondary = true
+        } else if weekly == nil, let primary, !consumedPrimary {
+            weekly = mapWindow(primary)
+            consumedPrimary = true
+        }
+
+        return (fiveHour, weekly)
     }
 
     private static func matchesDuration(_ window: RateLimitWindowSnapshot, seconds: Int) -> Bool {

@@ -25,24 +25,32 @@ final class SwitcherooAppUsageTests: XCTestCase {
         harness: EngineHarness,
         fetcher: MockAccountUsageFetcher,
         stalenessInterval: TimeInterval = 60,
-        failureCooldown: TimeInterval = 30
+        failureCooldown: TimeInterval = 30,
+        clock: FakeClock? = nil
     ) -> SwitcherooApp {
-        SwitcherooApp(
+        let now: @Sendable () -> Date
+        if let clock {
+            now = { clock.now }
+        } else {
+            now = { Date() }
+        }
+        return SwitcherooApp(
             engine: harness.engine,
             fileIO: harness.fileIO,
             providers: [ProviderDescriptor(id: "codex", displayName: "Codex")],
             usageFetcher: fetcher,
             usageStalenessInterval: stalenessInterval,
-            usageFailureCooldown: failureCooldown
+            usageFailureCooldown: failureCooldown,
+            now: now
         )
     }
 
-    private func usage(_ accountId: String) -> SwitcherooAccountUsage {
+    private func usage(_ accountId: String, fetchedAt: Date = Date()) -> SwitcherooAccountUsage {
         SwitcherooAccountUsage(
             accountId: accountId,
             fiveHour: SwitcherooUsageWindow(usedPercent: 42, remainingPercent: 58, windowSeconds: 18_000, resetsAt: nil),
             weekly: SwitcherooUsageWindow(usedPercent: 84, remainingPercent: 16, windowSeconds: 604_800, resetsAt: nil),
-            fetchedAt: Date()
+            fetchedAt: fetchedAt
         )
     }
 
@@ -238,8 +246,9 @@ final class SwitcherooAppUsageTests: XCTestCase {
     func testSupersededBatchFoldsInFlightAccountAndDropsOldGeneration() async throws {
         let gate = Gate()
         let counter = Counter()
-        let acc1Usage = usage("acc-1")
-        let acc2Usage = usage("acc-2")
+        let clock = FakeClock()
+        let acc1Usage = usage("acc-1", fetchedAt: clock.now)
+        let acc2Usage = usage("acc-2", fetchedAt: clock.now)
         let (harness, fetcher) = try makeHarness(
             accounts: [("acc-1", "Primary"), ("acc-2", "Backup")],
             activeId: "acc-1"
@@ -253,15 +262,15 @@ final class SwitcherooAppUsageTests: XCTestCase {
             counter.increment()
             return acc2Usage
         }
-        let app = makeApp(harness: harness, fetcher: fetcher, stalenessInterval: 0.2)
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
         app.refresh()
         // Batch 1: acc-1 is blocked in flight; acc-2 loads.
         _ = await waitForTerminalState(app, accountId: "acc-2")
 
-        // acc-2 ages past the staleness window, so a second refresh starts a
-        // new batch; the still-in-flight acc-1 must fold into it.
-        try await Task.sleep(nanoseconds: 250_000_000)
+        // acc-2 ages past the 60s staleness window, so a second refresh starts
+        // a new batch; the still-in-flight acc-1 must fold into it.
+        clock.advance(by: 61)
         app.refresh()
 
         guard case .loading = app.snapshot().usageStatesByAccountId["acc-1"] else {
@@ -310,25 +319,26 @@ final class SwitcherooAppUsageTests: XCTestCase {
 
     func testRefreshSkipsFreshResultsAndRefetchesStaleOnes() async throws {
         let counter = Counter()
-        let acc1Usage = usage("acc-1")
+        let clock = FakeClock()
+        let acc1Usage = usage("acc-1", fetchedAt: clock.now)
         let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
         fetcher.setHandler(accountId: "acc-1") {
             counter.increment()
             return acc1Usage
         }
-        let app = makeApp(harness: harness, fetcher: fetcher, stalenessInterval: 0.2)
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
         app.refresh()
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(counter.value, 1)
 
-        // Fresh result (within the 200ms staleness window): skip.
+        // Fresh result (clock unchanged): skip.
         app.refresh()
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(counter.value, 1)
 
-        // Once the published result ages past the staleness window, refresh again.
-        try await Task.sleep(nanoseconds: 250_000_000)
+        // Once the clock advances past the 60s staleness window, refresh again.
+        clock.advance(by: 61)
         app.refresh()
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(counter.value, 2)
@@ -544,8 +554,48 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
     }
 
-    func testCredentialsNeverCrossAccounts() async throws {
-        let (harness, fetcher) = try makeHarness(
+    func testSupersededBatchStopsSchedulingQueuedWorkAndOrdersActiveFirst() async throws {
+        let gate = Gate()
+        let accountIds = (1...6).map { "acc-\($0)" }
+        let accounts = accountIds.map { ($0, "Account \($0)") }
+        let (harness, fetcher) = try makeHarness(accounts: accounts, activeId: "acc-1")
+        let accUsages = accountIds.map { usage($0) }
+        for (index, accountId) in accountIds.enumerated() {
+            fetcher.setHandler(accountId: accountId) {
+                await gate.wait()
+                return accUsages[index]
+            }
+        }
+        let app = makeApp(harness: harness, fetcher: fetcher)
+
+        // Batch A: three children start and block; the rest wait in the queue.
+        app.refresh()
+        await waitUntil { fetcher.callAccountIds.count == 3 }
+
+        // A switch starts batch B (new generation, active account first) while
+        // A's three requests are still blocked. A's queued work must not start.
+        app.switchToAccount(idOrName: "acc-6")
+        await waitUntil { fetcher.callAccountIds.count == 6 }
+
+        let calls = fetcher.callAccountIds
+        XCTAssertEqual(calls.count, 6)
+        XCTAssertTrue(
+            Set(calls).isSubset(of: ["acc-1", "acc-2", "acc-3", "acc-6"]),
+            "superseded batch A must stop scheduling queued work; active-first switch must start acc-6: got \(calls)"
+        )
+
+        // Release everything: both batches finish; B covers every account.
+        gate.open()
+        for accountId in accountIds {
+            let state = await waitForTerminalState(app, accountId: accountId)
+            guard case .loaded = state else {
+                return XCTFail("expected loaded state for \(accountId), got \(state)")
+            }
+        }
+        XCTAssertEqual(fetcher.callAccountIds.count, 9, "batch A contributes 3 calls, batch B contributes 6")
+    }
+
+    func testCredentialsNeverCrossAccounts() async throws {        let (harness, fetcher) = try makeHarness(
             accounts: [("acc-1", "Primary"), ("acc-2", "Backup")],
             activeId: "acc-1"
         )
@@ -592,30 +642,71 @@ final class SwitcherooAppUsageTests: XCTestCase {
     }
 
     func testUnavailableRowsRespectFailureCooldown() async throws {
+        let clock = FakeClock()
         let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
         fetcher.setError(accountId: "acc-1", error: SwitcherooUsageError.networkUnavailable)
-        let app = makeApp(harness: harness, fetcher: fetcher, failureCooldown: 60)
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
         app.refresh()
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(fetcher.callAccountIds.count, 1)
 
-        // Inside the cooldown: no retry.
+        // Inside the cooldown (clock unchanged): no retry.
         app.refresh()
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(fetcher.callAccountIds.count, 1, "failed rows must not be retried inside the cooldown")
+
+        // Past the 30s cooldown: retry happens.
+        clock.advance(by: 31)
+        app.refresh()
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        XCTAssertEqual(fetcher.callAccountIds.count, 2)
     }
 
     func testRetryAfterExtendsCooldown() async throws {
+        let clock = FakeClock()
         let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
         fetcher.setError(accountId: "acc-1", error: SwitcherooUsageError.serviceUnavailable(retryAfterSeconds: 600))
-        let app = makeApp(harness: harness, fetcher: fetcher, failureCooldown: 30)
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
         app.refresh()
         _ = await waitForTerminalState(app, accountId: "acc-1")
+        XCTAssertEqual(fetcher.callAccountIds.count, 1)
 
+        // Even past the 30s default cooldown, the server's 600s hint wins.
+        clock.advance(by: 120)
         app.refresh()
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(fetcher.callAccountIds.count, 1, "the server Retry-After hint must extend the cooldown")
+    }
+
+    func testMissingCredentialRespectsCooldown() async throws {
+        let clock = FakeClock()
+        let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
+        try? harness.secureStore.delete(key: "codex:acc-1")
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
+        let credentialLoadCount = { () -> Int in
+            harness.secureStore.recordedLoadedKeys.filter { $0 == "codex:acc-1" }.count
+        }
+
+        app.refresh()
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        XCTAssertTrue(fetcher.callAccountIds.isEmpty)
+        let loadsAfterFirstRefresh = credentialLoadCount()
+
+        // Inside the cooldown, a refresh must not re-read the missing
+        // credential or put the row back into loading. Only the metadata
+        // refresh reads the store, so the delta stays at one load.
+        app.refresh()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let deltaInsideCooldown = credentialLoadCount() - loadsAfterFirstRefresh
+        XCTAssertEqual(deltaInsideCooldown, 1, "missing-credential rows must respect the failure cooldown")
+
+        // Past the cooldown the credential is read again (metadata + usage prep).
+        clock.advance(by: 31)
+        app.refresh()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let deltaPastCooldown = credentialLoadCount() - loadsAfterFirstRefresh - deltaInsideCooldown
+        XCTAssertEqual(deltaPastCooldown, 2)
     }
 }
