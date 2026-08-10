@@ -786,4 +786,116 @@ final class SwitcherooAppUsageTests: XCTestCase {
         let deltaPastCooldown = credentialLoadCount() - loadsAfterFirstRefresh - deltaInsideCooldown
         XCTAssertEqual(deltaPastCooldown, 2)
     }
+
+    func testInactiveAccountExponentialBackoffEscalatesAndResets() async throws {
+        let clock = FakeClock()
+        let (harness, fetcher) = try makeHarness(
+            accounts: [("acc-1", "Primary"), ("acc-2", "Backup")],
+            activeId: "acc-1"
+        )
+
+        let acc1Usage = usage("acc-1", fetchedAt: clock.now)
+        let acc2Usage = usage("acc-2", fetchedAt: clock.now)
+
+        let acc1Calls = Counter()
+        fetcher.setHandler(accountId: "acc-1") {
+            acc1Calls.increment()
+            return acc1Usage
+        }
+
+        let acc2HandlerCalls = Counter()
+        fetcher.setHandler(accountId: "acc-2") {
+            acc2HandlerCalls.increment()
+            if acc2HandlerCalls.value <= 3 {
+                throw SwitcherooUsageError.networkUnavailable
+            }
+            return acc2Usage
+        }
+
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
+
+        // Launch seeds both accounts: acc-1 loads, acc-2 fails (failureCount=1).
+        app.refresh(usageTrigger: .launch)
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(acc2HandlerCalls.value, 1)
+        XCTAssertEqual(acc1Calls.value, 1)
+
+        // Inside 1-minute backoff: no retry at 59 s.
+        clock.advance(by: 59)
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(acc2HandlerCalls.value, 1, "must not retry within 1-minute backoff")
+
+        // Past 1-minute backoff: retry fires (failureCount=2).
+        clock.advance(by: 2)
+        app.refresh(usageTrigger: .tieredTimer)
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(acc2HandlerCalls.value, 2, "must retry after 1-minute backoff")
+
+        // Inside 2-minute backoff: no retry at +119 s.
+        clock.advance(by: 119)
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(acc2HandlerCalls.value, 2, "must not retry within 2-minute backoff")
+
+        // Past 2-minute backoff: retry (failureCount=3).
+        clock.advance(by: 2)
+        app.refresh(usageTrigger: .tieredTimer)
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(acc2HandlerCalls.value, 3, "must retry after 2-minute backoff")
+
+        // Inside 4-minute backoff: no retry at +239 s.
+        clock.advance(by: 239)
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(acc2HandlerCalls.value, 3, "must not retry within 4-minute backoff")
+
+        // Past 4-minute backoff: retry → success (failureCount cleared).
+        clock.advance(by: 2)
+        app.refresh(usageTrigger: .tieredTimer)
+        let acc2State = await waitForTerminalState(app, accountId: "acc-2")
+        guard case .loaded = acc2State else {
+            return XCTFail("expected loaded after successful retry, got \(acc2State)")
+        }
+        XCTAssertEqual(acc2HandlerCalls.value, 4, "must retry after 4-minute backoff and succeed")
+
+        // Backoff resets after success. Replace handler to fail again, then
+        // advance past the inactive tier (30 min) so the loaded row is stale.
+        fetcher.setError(accountId: "acc-2", error: SwitcherooUsageError.networkUnavailable)
+        let acc2CallsBeforeReset = fetcher.callAccountIds.filter { $0 == "acc-2" }.count
+
+        clock.advance(by: 30 * 60 + 1)
+        app.refresh(usageTrigger: .tieredTimer)
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(
+            fetcher.callAccountIds.filter { $0 == "acc-2" }.count,
+            acc2CallsBeforeReset + 1,
+            "stale inactive must retry after tier elapses"
+        )
+
+        // Fresh backoff starts at 1 minute: no retry at 30 s.
+        clock.advance(by: 30)
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(
+            fetcher.callAccountIds.filter { $0 == "acc-2" }.count,
+            acc2CallsBeforeReset + 1,
+            "after backoff reset: must not retry within 1 minute"
+        )
+
+        // Past 1 minute: retry → confirms backoff reset.
+        clock.advance(by: 31)
+        app.refresh(usageTrigger: .tieredTimer)
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(
+            fetcher.callAccountIds.filter { $0 == "acc-2" }.count,
+            acc2CallsBeforeReset + 2,
+            "after backoff reset: must retry after 1 minute"
+        )
+
+        // Active account refreshed on its own 5-minute cadence, never held
+        // back by the inactive backoff.
+        XCTAssertGreaterThan(acc1Calls.value, 1, "active account must refresh on its own cadence")
+    }
 }
