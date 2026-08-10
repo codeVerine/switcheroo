@@ -11,14 +11,16 @@ struct TransactionJournal: Codable {
         var path: String
         var previous: Data?
         var expected: Data?
+        var quarantinePath: String?
         var publicationStarted: Bool
         var publicationMarkerPresent: Bool
 
-        init(id: String = "unknown", path: String, previous: Data?, expected: Data? = nil, publicationStarted: Bool? = nil) {
+        init(id: String = "unknown", path: String, previous: Data?, expected: Data? = nil, quarantinePath: String? = nil, publicationStarted: Bool? = nil) {
             self.id = id
             self.path = path
             self.previous = previous
             self.expected = expected
+            self.quarantinePath = quarantinePath
             self.publicationStarted = publicationStarted ?? (expected != nil)
             self.publicationMarkerPresent = true
         }
@@ -28,6 +30,7 @@ struct TransactionJournal: Codable {
             case path
             case previous
             case expected
+            case quarantinePath
             case publicationStarted
         }
 
@@ -37,6 +40,7 @@ struct TransactionJournal: Codable {
             path = try container.decode(String.self, forKey: .path)
             previous = try container.decodeIfPresent(Data.self, forKey: .previous)
             expected = try container.decodeIfPresent(Data.self, forKey: .expected)
+            quarantinePath = try container.decodeIfPresent(String.self, forKey: .quarantinePath)
             let marker = try container.decodeIfPresent(Bool.self, forKey: .publicationStarted)
             publicationStarted = marker ?? false
             publicationMarkerPresent = marker != nil

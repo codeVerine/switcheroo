@@ -688,6 +688,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let destinationPath: String
         let previous: Data?
         let writtenData: Data
+        var quarantinePath: String?
     }
 
     /// Signals that a target write failed and this call's own compare-and-swap
@@ -809,10 +810,17 @@ public final class SwitcherooEngine: @unchecked Sendable {
     private func writeTargetDocuments(
         _ prepared: [PreparedTarget],
         willWrite: (Int) throws -> Void,
-        didWrite: (Int, AuthTargetWriteResult) throws -> Void
+        didWrite: (Int, AuthTargetWriteResult) throws -> Void,
+        prepareRollback: (inout [WrittenTarget]) throws -> Void
     ) throws -> [WrittenTarget] {
         func rollbackAndThrow(item: PreparedTarget, written: [WrittenTarget], reason: String) throws -> Never {
-            let unrecoverable = restoreTargetFiles(written)
+            var rollbackTargets = written
+            do {
+                try prepareRollback(&rollbackTargets)
+            } catch {
+                throw TargetRollbackIncomplete(unrestoredPaths: rollbackTargets.map(\.destinationPath))
+            }
+            let unrecoverable = restoreTargetFiles(rollbackTargets)
             if !unrecoverable.isEmpty {
                 throw TargetRollbackIncomplete(unrestoredPaths: unrecoverable)
             }
@@ -845,7 +853,8 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     adapter: item.adapter,
                     destinationPath: item.destinationPath,
                     previous: published.previousData,
-                    writtenData: published.writtenData
+                    writtenData: published.writtenData,
+                    quarantinePath: nil
                 ))
                 do {
                     try didWrite(index, published)
@@ -861,7 +870,8 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 adapter: item.adapter,
                 destinationPath: item.destinationPath,
                 previous: result.previousData,
-                writtenData: result.writtenData
+                writtenData: result.writtenData,
+                quarantinePath: nil
             ))
             do {
                 try didWrite(index, result)
@@ -882,6 +892,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 previous: entry.previous,
                 expectedCurrent: entry.writtenData,
                 destinationPath: entry.destinationPath,
+                quarantinePath: entry.quarantinePath,
                 fileIO: fileIO
             ) {
                 unrecoverable.append(entry.destinationPath)
@@ -983,6 +994,25 @@ public final class SwitcherooEngine: @unchecked Sendable {
             var writtenTargets: [WrittenTarget] = []
             var appliedChanges: [KeychainChange] = []
             let journalPath = try transactionJournalPath()
+            let prepareRollback: (inout [WrittenTarget]) throws -> Void = { targets in
+                var changed = false
+                for index in targets.indices {
+                    guard targets[index].previous == nil else { continue }
+                    guard let targetIndex = journal.targets.firstIndex(where: { $0.path == targets[index].destinationPath }) else {
+                        throw AuthTargetSyncError.rollbackIncomplete(
+                            message: "Account switch rollback could not identify a journaled auth target. A recovery record remains at \(journalPath)."
+                        )
+                    }
+                    if journal.targets[targetIndex].quarantinePath == nil {
+                        journal.targets[targetIndex].quarantinePath = "\(targets[index].destinationPath).switcheroo-quarantine.\(journal.txid).\(targetIndex)"
+                        changed = true
+                    }
+                    targets[index].quarantinePath = journal.targets[targetIndex].quarantinePath
+                }
+                if changed {
+                    try self.writeJournal(journal)
+                }
+            }
 
             do {
                 try writeJournal(journal)
@@ -992,14 +1022,19 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     appliedChanges.append(change)
                 }
 
-                writtenTargets = try writeTargetDocuments(preparedTargets, willWrite: { index in
-                    journal.targets[index].publicationStarted = true
-                    try writeJournal(journal)
-                }) { index, result in
-                    journal.targets[index].previous = result.previousData
-                    journal.targets[index].expected = result.writtenData
-                    try writeJournal(journal)
-                }
+                writtenTargets = try writeTargetDocuments(
+                    preparedTargets,
+                    willWrite: { index in
+                        journal.targets[index].publicationStarted = true
+                        try writeJournal(journal)
+                    },
+                    didWrite: { index, result in
+                        journal.targets[index].previous = result.previousData
+                        journal.targets[index].expected = result.writtenData
+                        try writeJournal(journal)
+                    },
+                    prepareRollback: prepareRollback
+                )
 
                 try plan.mutateConfig(&next)
                 try persist(next)
@@ -1021,6 +1056,17 @@ public final class SwitcherooEngine: @unchecked Sendable {
                             message: "Account switch failed before rollback could be made recoverable. A recovery record remains at \(journalPath)."
                         )
                     }
+                }
+                do {
+                    try prepareRollback(&writtenTargets)
+                } catch {
+                    let failures = writtenTargets
+                        .filter { $0.previous == nil }
+                        .map(\.destinationPath)
+                        + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: plan.previousConfig)
+                    throw AuthTargetSyncError.rollbackIncomplete(
+                        message: "Account switch failed before rollback could be made recoverable. Failed to restore: \(failures.joined(separator: "; ")). A recovery record remains at \(journalPath)."
+                    )
                 }
                 if let targetFailure = error as? TargetRollbackIncomplete {
                     let failures = targetFailure.unrestoredPaths
@@ -1124,10 +1170,18 @@ public final class SwitcherooEngine: @unchecked Sendable {
         guard fileIO.itemExists(path: path) else { return }
 
         guard let data = try? fileIO.readFile(path: path),
-              let journal = try? JSONDecoder().decode(TransactionJournal.self, from: data) else {
+              var journal = try? JSONDecoder().decode(TransactionJournal.self, from: data) else {
             throw AuthTargetSyncError.rollbackIncomplete(
                 message: "A transaction journal at \(path) is unreadable. Fix or remove it, then switch accounts again."
             )
+        }
+
+        for index in journal.targets.indices {
+            guard resolveJournalQuarantine(&journal, targetIndex: index) else {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Recovery of an interrupted account switch could not resolve a quarantined auth file. Fix or remove the affected transaction journal at \(path), then switch again."
+                )
+            }
         }
 
         if journal.configCommitted {
@@ -1186,6 +1240,43 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
     }
 
+    private func resolveJournalQuarantine(_ journal: inout TransactionJournal, targetIndex: Int) -> Bool {
+        guard let quarantinePath = journal.targets[targetIndex].quarantinePath else { return true }
+        guard let expected = journal.targets[targetIndex].expected else { return false }
+
+        if !fileIO.itemExists(path: quarantinePath) {
+            journal.targets[targetIndex].quarantinePath = nil
+            do {
+                try writeJournal(journal)
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        guard let quarantined = try? fileIO.readFile(path: quarantinePath) else { return false }
+        if quarantined == expected {
+            do {
+                try fileIO.removeItem(path: quarantinePath)
+                journal.targets[targetIndex].quarantinePath = nil
+                try writeJournal(journal)
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        guard !fileIO.fileExists(path: journal.targets[targetIndex].path) else { return false }
+        do {
+            try fileIO.moveItemAtomically(from: quarantinePath, to: journal.targets[targetIndex].path)
+            journal.targets[targetIndex].quarantinePath = nil
+            try writeJournal(journal)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func committedTargetsMatch(_ journal: TransactionJournal) -> Bool {
         for target in journal.targets {
             guard target.publicationMarkerPresent,
@@ -1215,6 +1306,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
             previous: target.previous,
             expectedCurrent: expected,
             destinationPath: target.path,
+            quarantinePath: target.quarantinePath,
             fileIO: fileIO
         )
     }

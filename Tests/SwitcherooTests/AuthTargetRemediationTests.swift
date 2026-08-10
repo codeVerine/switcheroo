@@ -89,6 +89,132 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertFalse(fileIO.itemExists(path: journalPath))
     }
 
+    func testStartupResolvesJournaledQuarantineBeforeRestoringNilPreimage() throws {
+        let previousConfig = SwitcherooConfig()
+        let published = Data("published".utf8)
+        let quarantinePath = "\(activeAuthPath).switcheroo-quarantine.crash-3.0"
+        let fileIO = InMemoryFileIO()
+        fileIO.files[quarantinePath] = published
+        fileIO.files[journalPath] = try JSONEncoder().encode(TransactionJournal(
+            txid: "crash-3",
+            createdAt: Date(),
+            configCommitted: false,
+            previousConfig: previousConfig,
+            targets: [
+                TransactionJournal.Target(
+                    id: "codex",
+                    path: activeAuthPath,
+                    previous: nil,
+                    expected: published,
+                    quarantinePath: quarantinePath
+                ),
+            ],
+            keychainChanges: []
+        ))
+
+        _ = try SwitcherooEngine(
+            configStore: InMemoryConfigStore(config: previousConfig),
+            secureStore: InMemorySecureStore(),
+            fileIO: fileIO,
+            paths: InMemoryPaths(),
+            providers: [StubProvider()],
+            authTargetAdapters: [CodexAuthTargetAdapter(defaultAuthFilePath: activeAuthPath)]
+        )
+
+        XCTAssertNil(fileIO.files[activeAuthPath])
+        XCTAssertNil(fileIO.files[quarantinePath])
+        XCTAssertFalse(fileIO.itemExists(path: journalPath))
+    }
+
+    func testStartupRestoresUnexpectedQuarantineAndRetainsJournal() throws {
+        let previousConfig = SwitcherooConfig()
+        let published = Data("published".utf8)
+        let concurrent = Data("concurrent".utf8)
+        let quarantinePath = "\(activeAuthPath).switcheroo-quarantine.crash-4.0"
+        let fileIO = InMemoryFileIO()
+        fileIO.files[quarantinePath] = concurrent
+        fileIO.files[journalPath] = try JSONEncoder().encode(TransactionJournal(
+            txid: "crash-4",
+            createdAt: Date(),
+            configCommitted: false,
+            previousConfig: previousConfig,
+            targets: [
+                TransactionJournal.Target(
+                    id: "codex",
+                    path: activeAuthPath,
+                    previous: nil,
+                    expected: published,
+                    quarantinePath: quarantinePath
+                ),
+            ],
+            keychainChanges: []
+        ))
+
+        XCTAssertThrowsError(try SwitcherooEngine(
+            configStore: InMemoryConfigStore(config: previousConfig),
+            secureStore: InMemorySecureStore(),
+            fileIO: fileIO,
+            paths: InMemoryPaths(),
+            providers: [StubProvider()],
+            authTargetAdapters: [CodexAuthTargetAdapter(defaultAuthFilePath: activeAuthPath)]
+        )) { error in
+            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+                return XCTFail("Expected rollbackIncomplete, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(fileIO.files[activeAuthPath], concurrent)
+        XCTAssertNil(fileIO.files[quarantinePath])
+        XCTAssertTrue(fileIO.itemExists(path: journalPath))
+        let journal = try JSONDecoder().decode(TransactionJournal.self, from: try XCTUnwrap(fileIO.files[journalPath]))
+        XCTAssertNil(journal.targets.first?.quarantinePath)
+    }
+
+    func testRollbackJournalsQuarantineBeforeRemovingNilPreimage() throws {
+        let first = makeAccount(id: "acc-first", name: "First")
+        let second = makeAccount(id: "acc-second", name: "Second")
+        let config = SwitcherooConfig(
+            defaultProviderId: "codex",
+            providers: [makeProviderState(
+                id: "codex",
+                activeAccountId: first.id,
+                accounts: [first, second],
+                activeAuthFilePathOverride: activeAuthPath
+            )]
+        )
+        let stub = StubAuthTargetAdapter(
+            defaultDestinationAuthFilePath: "~/.stub-target/auth.json",
+            writeMode: .replaceWithSource
+        )
+        let harness = try EngineHarness(
+            config: config,
+            includeCodexTarget: false,
+            authTargetAdapters: [stub, CodexAuthTargetAdapter(defaultAuthFilePath: activeAuthPath)]
+        )
+        let firstAuth = try makeCodexAuthData(refreshToken: "first")
+        let secondAuth = try makeCodexAuthData(refreshToken: "second")
+        harness.secureStore.items["codex:\(first.id)"] = firstAuth
+        harness.secureStore.items["codex:\(second.id)"] = secondAuth
+        harness.fileIO.files[activeAuthPath] = firstAuth
+        harness.fileIO.failWritePaths.insert(activeAuthPath)
+
+        var observedJournaledQuarantine = false
+        harness.fileIO.onAtomicRemoveMove = { path, _ in
+            guard path == "~/.stub-target/auth.json",
+                  let data = harness.fileIO.files[self.journalPath],
+                  let journal = try? JSONDecoder().decode(TransactionJournal.self, from: data) else {
+                return
+            }
+            observedJournaledQuarantine = journal.targets.contains {
+                $0.path == path && $0.quarantinePath != nil
+            }
+        }
+
+        XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: second.id))
+        XCTAssertTrue(observedJournaledQuarantine)
+        XCTAssertFalse(harness.fileIO.itemExists(path: "~/.stub-target/auth.json"))
+    }
+
     func testStartupReconcilesCommittedTransactionByCompletingIt() throws {
         let firstAuth = try makeCodexAuthData(refreshToken: "refresh-first")
         let secondAuth = try makeCodexAuthData(

@@ -181,11 +181,11 @@ final class InMemoryFileIO: SwitcherooFileIO {
         return true
     }
 
-    func removeFileAtomically(ifCurrentEquals expected: Data, path: String) throws -> Bool {
+    func removeFileAtomically(ifCurrentEquals expected: Data, path: String, quarantinePath: String) throws -> Bool {
         guard files[path] == expected else { return false }
         onBeforeAtomicRemove?(path)
 
-        let quarantinePath = "\(path).switcheroo-quarantine.\(UUID().uuidString)"
+        guard files[quarantinePath] == nil else { return false }
         guard let quarantinedData = files.removeValue(forKey: path) else { return false }
         files[quarantinePath] = quarantinedData
         onAtomicRemoveMove?(path, quarantinePath)
@@ -201,6 +201,14 @@ final class InMemoryFileIO: SwitcherooFileIO {
 
         files.removeValue(forKey: quarantinePath)
         return true
+    }
+
+    func moveItemAtomically(from sourcePath: String, to destinationPath: String) throws {
+        guard let data = files[sourcePath], files[destinationPath] == nil else {
+            throw NSError(domain: "TestSupport", code: 9, userInfo: [NSLocalizedDescriptionKey: "atomic move failed for test"])
+        }
+        files.removeValue(forKey: sourcePath)
+        files[destinationPath] = data
     }
 
     func removeItem(path: String) throws {

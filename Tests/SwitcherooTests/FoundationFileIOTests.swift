@@ -55,9 +55,10 @@ final class FoundationFileIOTests: XCTestCase {
         let expected = Data("expected".utf8)
         try fileIO.writeFileAtomically(expected, path: fileURL.path, permissions: 0o600)
 
-        XCTAssertFalse(try fileIO.removeFileAtomically(ifCurrentEquals: Data("other".utf8), path: fileURL.path))
+        let quarantinePath = "\(fileURL.path).quarantine"
+        XCTAssertFalse(try fileIO.removeFileAtomically(ifCurrentEquals: Data("other".utf8), path: fileURL.path, quarantinePath: quarantinePath))
         XCTAssertTrue(fileIO.fileExists(path: fileURL.path))
-        XCTAssertTrue(try fileIO.removeFileAtomically(ifCurrentEquals: expected, path: fileURL.path))
+        XCTAssertTrue(try fileIO.removeFileAtomically(ifCurrentEquals: expected, path: fileURL.path, quarantinePath: quarantinePath))
         XCTAssertFalse(fileIO.fileExists(path: fileURL.path))
     }
 

@@ -41,7 +41,7 @@ public protocol AuthTargetAdapter: Sendable {
     /// written.
     func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult
 
-    func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool
+    func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, quarantinePath: String?, fileIO: SwitcherooFileIO) -> Bool
 }
 
 public struct AuthTargetWriteResult: Sendable {
@@ -66,6 +66,10 @@ public struct AuthTargetPublicationError: Error, Sendable {
 
 public extension AuthTargetAdapter {
     func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool {
+        restoreDestination(previous: previous, expectedCurrent: expectedCurrent, destinationPath: destinationPath, quarantinePath: nil, fileIO: fileIO)
+    }
+
+    func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, quarantinePath: String?, fileIO: SwitcherooFileIO) -> Bool {
         do {
             return try fileIO.withExclusiveLock(path: "\(destinationPath).lock") {
                 guard fileIO.fileExists(path: destinationPath) else {
@@ -77,7 +81,8 @@ public extension AuthTargetAdapter {
                 if let previous {
                     return try fileIO.replaceFileAtomically(previous, ifCurrentEquals: expectedCurrent, path: destinationPath, permissions: 0o600)
                 } else {
-                    return try fileIO.removeFileAtomically(ifCurrentEquals: expectedCurrent, path: destinationPath)
+                    guard let quarantinePath else { return false }
+                    return try fileIO.removeFileAtomically(ifCurrentEquals: expectedCurrent, path: destinationPath, quarantinePath: quarantinePath)
                 }
             }
         } catch {

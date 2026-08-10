@@ -32,7 +32,8 @@ public protocol SwitcherooFileIO {
     /// Atomically remove a destination only when its bytes equal `expected`.
     /// The destination may be absent briefly while a same-directory quarantine
     /// rename is verified.
-    func removeFileAtomically(ifCurrentEquals expected: Data, path: String) throws -> Bool
+    func removeFileAtomically(ifCurrentEquals expected: Data, path: String, quarantinePath: String) throws -> Bool
+    func moveItemAtomically(from sourcePath: String, to destinationPath: String) throws
     func removeItem(path: String) throws
     /// Create a directory; throws when it already exists (exclusive creation,
     /// used by the Pi-compatible lock protocol).

@@ -116,7 +116,7 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         return AuthTargetWriteResult(previousData: existing, writtenData: merged)
     }
 
-    public func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool {
+    public func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, quarantinePath: String?, fileIO: SwitcherooFileIO) -> Bool {
         guard let lock = try? PiAuthFileLock.acquire(path: destinationPath, fileIO: fileIO) else {
             return false
         }

@@ -82,6 +82,7 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
             previous: nil,
             expectedCurrent: expected,
             destinationPath: path,
+            quarantinePath: "\(path).quarantine",
             fileIO: fileIO
         ))
         XCTAssertEqual(fileIO.files[path], concurrent)
@@ -103,6 +104,7 @@ final class CodexAuthTargetAdapterTests: XCTestCase {
             previous: nil,
             expectedCurrent: expected,
             destinationPath: path,
+            quarantinePath: "\(path).quarantine",
             fileIO: fileIO
         ))
         XCTAssertEqual(fileIO.files[path], concurrent)

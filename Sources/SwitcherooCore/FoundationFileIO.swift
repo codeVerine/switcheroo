@@ -78,16 +78,16 @@ public struct FoundationFileIO: SwitcherooFileIO {
         return true
     }
 
-    public func removeFileAtomically(ifCurrentEquals expected: Data, path: String) throws -> Bool {
+    public func removeFileAtomically(ifCurrentEquals expected: Data, path: String, quarantinePath: String) throws -> Bool {
         let url = url(forPath: path)
         let directory = url.deletingLastPathComponent()
+        let quarantineURL = self.url(forPath: quarantinePath)
 
         guard fileManager.fileExists(atPath: url.path),
               try Data(contentsOf: url) == expected else {
             return false
         }
 
-        let quarantineURL = try createUniqueQuarantineURL(in: directory)
         do {
             try fileManager.moveItem(at: url, to: quarantineURL)
             try fsyncDirectory(directory)
@@ -95,8 +95,7 @@ public struct FoundationFileIO: SwitcherooFileIO {
             let quarantinedData = try Data(contentsOf: quarantineURL)
             guard quarantinedData == expected else {
                 if !fileManager.fileExists(atPath: url.path) {
-                    try fileManager.moveItem(at: quarantineURL, to: url)
-                    try fsyncDirectory(directory)
+                    try moveItemAtomically(from: quarantinePath, to: path)
                 }
                 return false
             }
@@ -107,11 +106,17 @@ public struct FoundationFileIO: SwitcherooFileIO {
         } catch {
             if fileManager.fileExists(atPath: quarantineURL.path),
                !fileManager.fileExists(atPath: url.path) {
-                try? fileManager.moveItem(at: quarantineURL, to: url)
-                try? fsyncDirectory(directory)
+                try? moveItemAtomically(from: quarantinePath, to: path)
             }
             throw error
         }
+    }
+
+    public func moveItemAtomically(from sourcePath: String, to destinationPath: String) throws {
+        let sourceURL = url(forPath: sourcePath)
+        let destinationURL = url(forPath: destinationPath)
+        try fileManager.moveItem(at: sourceURL, to: destinationURL)
+        try fsyncDirectory(sourceURL.deletingLastPathComponent())
     }
 
     public func removeItem(path: String) throws {
@@ -211,16 +216,6 @@ public struct FoundationFileIO: SwitcherooFileIO {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Could not create temporary file in \(directory.path)"])
         }
         throw NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST), userInfo: [NSLocalizedDescriptionKey: "Could not create a unique temporary file in \(directory.path)"])
-    }
-
-    private func createUniqueQuarantineURL(in directory: URL) throws -> URL {
-        for _ in 0..<16 {
-            let quarantineURL = directory.appendingPathComponent(".switcheroo.\(UUID().uuidString).quarantine")
-            if !fileManager.fileExists(atPath: quarantineURL.path) {
-                return quarantineURL
-            }
-        }
-        throw NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST), userInfo: [NSLocalizedDescriptionKey: "Could not create a unique quarantine path in \(directory.path)"])
     }
 
     private func applyPermissions(_ permissions: Int, to path: String) throws {
