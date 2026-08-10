@@ -17,10 +17,10 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 
 | Control | Behavior |
 | --- | --- |
-| Refresh | Reloads config and active status from disk, and refreshes the active account's usage if the last result is stale. |
+| Refresh | Reloads config and active status from disk, and refreshes every account row's usage if the last results are stale. |
 | Import logged-in account | Snapshots the currently logged in provider account from `~/.codex/auth.json`. If that account is already in Switcheroo, the existing snapshot is refreshed instead of duplicated. |
 | Add account | Launches the official `codex login` flow in Terminal for a new account. |
-| Switch | Makes that account's snapshot the active `~/.codex/auth.json` and immediately loads the new account's usage. |
+| Switch | Makes that account's snapshot the active `~/.codex/auth.json` and starts one fresh usage generation covering every saved account. |
 | Delete | Removes the account entry and deletes the corresponding Keychain item. |
 
 > [!IMPORTANT]
@@ -30,12 +30,12 @@ When you open `Switcheroo.app` you won’t see a window. It runs as a menu bar i
 
 Every account row in the dropdown shows that account's remaining allowance under its name, for example `5h 58% · 1w 16%` (five-hour and weekly windows). Hover for reset timing. Details:
 
-- **When it loads**: on app launch and whenever the menu is opened, if the last result is older than a minute, Switcheroo fetches usage for all saved accounts at once. Each account is queried with its own saved credential, so every row reflects its own account.
+- **When it loads**: on app launch and whenever the menu is opened, if the last result is older than a minute, Switcheroo fetches usage for all saved accounts at once. Each account is queried with its own saved credential, so every row reflects its own account. Switching accounts always starts one fresh all-account batch, even when rows are still cached.
 - **Live updates**: results appear in the open dropdown as they arrive; rows briefly show `Checking usage…` and then settle into their loaded value without needing to close and reopen the menu.
 - **How it is fetched**: Switcheroo reads each account's saved `auth.json` snapshot from Keychain, derives a bearer credential in memory, and calls the Codex usage endpoint (same endpoint family the Codex CLI uses). See [Data & Security](/docs/DATA-AND-SECURITY.md).
 - **What the numbers mean**: the endpoint reports consumption as a percentage of each window. Switcheroo derives the remaining allowance (`100 − used`, clamped to 0–100) and shows that.
 - **Unavailable**: if an account's request fails (offline, sign-in expired, service busy, or an unexpected response), that row shows `Usage unavailable` with a hover hint. Other rows keep their own results - one account's failure never blocks the rest.
-- **Caching**: results are kept in memory for up to one minute; a request is skipped while one is already in flight for the same account, so opening the menu repeatedly does not spam the endpoint.
+- **Caching and retries**: results are kept in memory for up to one minute; a request is skipped while one is already in flight for the same account, so opening the menu repeatedly does not spam the endpoint. Failed rows wait out a short cooldown (honoring the server's `Retry-After` hint when provided) before being retried, and at most three requests run at once. No usage requests ever originate from the background auth-sync timer.
 
 Background behavior:
 

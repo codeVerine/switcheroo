@@ -17,7 +17,7 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(model.state.accounts.map(\.name), ["Seed"])
         XCTAssertEqual(model.state.activeAccountId, "acc-1")
-        XCTAssertEqual(app.refreshCalls, 0)
+        XCTAssertEqual(app.refreshTriggers, [])
     }
 
     func testRefreshUsesSnapshotFromApp() {
@@ -35,7 +35,7 @@ final class AppModelTests: XCTestCase {
 
         model.refresh()
 
-        XCTAssertEqual(app.refreshCalls, 1)
+        XCTAssertEqual(app.refreshTriggers, [.menuOpen])
         XCTAssertEqual(model.state.accounts.map(\.name), ["After"])
         XCTAssertEqual(model.state.activeAccountId, "acc-2")
     }
@@ -265,5 +265,20 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(app.deleteCalls, [account.id])
         XCTAssertEqual(app.syncCalls, 1)
         XCTAssertTrue(model.state.accounts.isEmpty)
+    }
+
+    func testSyncActiveSnapshotNeverTriggersUsageRefresh() {
+        let account = makeAccount(id: "acc-7", name: "Account")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account]))
+        let model = AppModel(app: app)
+
+        model.syncActiveSnapshot()
+
+        XCTAssertEqual(app.syncCalls, 1)
+        XCTAssertEqual(
+            app.refreshTriggers,
+            [],
+            "the auth-sync timer path must not trigger a usage refresh while the menu is closed"
+        )
     }
 }

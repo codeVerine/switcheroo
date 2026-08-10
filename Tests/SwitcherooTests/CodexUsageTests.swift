@@ -6,6 +6,7 @@ final class MockCodexHTTPTransport: CodexHTTPTransport, @unchecked Sendable {
     struct Stub: Sendable {
         var status: Int = 200
         var body: Data = Data()
+        var headers: [String: String] = [:]
     }
 
     private let lock = NSLock()
@@ -19,9 +20,9 @@ final class MockCodexHTTPTransport: CodexHTTPTransport, @unchecked Sendable {
         return recordedRequests
     }
 
-    func setResponse(status: Int, body: Data) {
+    func setResponse(status: Int, body: Data, headers: [String: String] = [:]) {
         lock.lock()
-        stub = Stub(status: status, body: body)
+        stub = Stub(status: status, body: body, headers: headers)
         error = nil
         lock.unlock()
     }
@@ -37,7 +38,7 @@ final class MockCodexHTTPTransport: CodexHTTPTransport, @unchecked Sendable {
         if let error {
             throw error
         }
-        return CodexAPIResponse(status: stub.status, body: stub.body)
+        return CodexAPIResponse(status: stub.status, body: stub.body, headers: stub.headers)
     }
 
     private func record(_ request: CodexAPIRequest) -> (Stub, Error?) {
@@ -107,7 +108,7 @@ final class CodexAPIClientTests: XCTestCase {
             _ = try await client.get(path: "usage", credential: credential)
             XCTFail("expected httpStatus error")
         } catch let error as CodexAPIClientError {
-            XCTAssertEqual(error, .httpStatus(401))
+            XCTAssertEqual(error, .httpStatus(401, retryAfterSeconds: nil))
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -138,6 +139,137 @@ final class CodexAPIClientTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": "acct-1"]])
         XCTAssertNil(CodexAPIClient.credential(fromAuthData: data))
         XCTAssertNil(CodexAPIClient.credential(fromAuthData: Data("not json".utf8)))
+    }
+
+    func testCredentialDerivesFedRAMPAndAccountIdFromIdTokenClaims() throws {
+        let claims: [String: Any] = [
+            "https://api.openai.com/auth": [
+                "chatgpt_account_is_fedramp": true,
+                "chatgpt_account_id": "ws-fedramp",
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "tokens": [
+                "access_token": "tok-fedramp",
+                "id_token": makeJWT(payload: claims),
+            ],
+        ])
+
+        let credential = try XCTUnwrap(CodexAPIClient.credential(fromAuthData: data))
+
+        XCTAssertEqual(credential.accessToken, "tok-fedramp")
+        XCTAssertEqual(credential.accountId, "ws-fedramp", "account id must fall back to the id-token claim")
+        XCTAssertTrue(credential.isFedrampAccount)
+    }
+
+    func testCredentialWithoutFedRAMPClaimIsNotFedramp() throws {
+        let claims: [String: Any] = [
+            "https://api.openai.com/auth": [
+                "chatgpt_account_is_fedramp": false,
+                "chatgpt_account_id": "ws-1",
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "tokens": [
+                "access_token": "tok-1",
+                "id_token": makeJWT(payload: claims),
+            ],
+        ])
+
+        let credential = try XCTUnwrap(CodexAPIClient.credential(fromAuthData: data))
+
+        XCTAssertFalse(credential.isFedrampAccount)
+        XCTAssertEqual(credential.accountId, "ws-1")
+    }
+
+    func testFedrampCredentialSendsRoutingHeaders() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 200, body: Data("{}".utf8))
+        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+        let credential = CodexAPICredential(accessToken: "tok-fed", accountId: "ws-fed", isFedrampAccount: true)
+
+        _ = try await client.get(path: "usage", credential: credential)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.headers["ChatGPT-Account-ID"], "ws-fed")
+        XCTAssertEqual(request.headers["X-OpenAI-Fedramp"], "true")
+    }
+
+    func testNonFedrampCredentialOmitsRoutingHeaders() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 200, body: Data("{}".utf8))
+        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+
+        _ = try await client.get(path: "usage", credential: credential)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertNil(request.headers["X-OpenAI-Fedramp"])
+    }
+
+    func testTransportUsesEphemeralSessionWithoutPersistence() {
+        let transport = URLSessionCodexTransport()
+        let configuration = transport.session.configuration
+
+        XCTAssertNil(configuration.urlCache)
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertEqual(configuration.httpCookieAcceptPolicy, .never)
+        XCTAssertNil(configuration.urlCredentialStorage)
+        XCTAssertEqual(configuration.requestCachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, transport.timeoutSeconds)
+        XCTAssertEqual(transport.timeoutSeconds, 10)
+    }
+
+    func testRetryAfterHeaderCarriedIntoHttpStatusError() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 429, body: Data("{}".utf8), headers: ["retry-after": "30"])
+        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+
+        do {
+            _ = try await client.get(path: "usage", credential: credential)
+            XCTFail("expected httpStatus error")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .httpStatus(429, retryAfterSeconds: 30))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testRetryAfterHTTPDateParsedAsDeltaSeconds() async throws {
+        let transport = MockCodexHTTPTransport()
+        let date = Date().addingTimeInterval(75)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        transport.setResponse(status: 429, body: Data("{}".utf8), headers: ["retry-after": formatter.string(from: date)])
+        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+
+        do {
+            _ = try await client.get(path: "usage", credential: credential)
+            XCTFail("expected httpStatus error")
+        } catch let error as CodexAPIClientError {
+            guard case .httpStatus(429, let retryAfterSeconds) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(try XCTUnwrap(retryAfterSeconds), 75, accuracy: 5)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testUnparseableRetryAfterYieldsNoHint() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 429, body: Data("{}".utf8), headers: ["retry-after": "whenever"])
+        let client = makeClient(baseURL: CodexAPIClient.defaultChatGptBaseURL, style: .chatgpt, transport: transport)
+
+        do {
+            _ = try await client.get(path: "usage", credential: credential)
+            XCTFail("expected httpStatus error")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .httpStatus(429, retryAfterSeconds: nil))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 }
 
@@ -267,11 +399,29 @@ final class CodexUsageFetcherTests: XCTestCase {
         XCTAssertNil(usage.weekly?.windowSeconds)
     }
 
-    func testMissingRateLimitProducesUsageWithNoWindows() async throws {
+    func testEmptyRateLimitPayloadThrowsMalformedResponse() async {
         transport.setResponse(status: 200, body: Data("{\"plan_type\": \"pro\"}".utf8))
+        do {
+            _ = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+            XCTFail("expected malformedResponse for a windowless 200 response")
+        } catch let error as SwitcherooUsageError {
+            XCTAssertEqual(error, .malformedResponse)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testSingleValidWindowStillLoadsWithOtherWindowNil() async throws {
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "plan_type": "pro",
+            "rate_limit": [
+                "primary_window": ["used_percent": 42, "limit_window_seconds": 18_000],
+            ],
+        ])
+        transport.setResponse(status: 200, body: payload)
         let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
 
-        XCTAssertNil(usage.fiveHour)
+        XCTAssertEqual(usage.fiveHour?.remainingPercent, 58)
         XCTAssertNil(usage.weekly)
     }
 
@@ -320,7 +470,19 @@ final class CodexUsageFetcherTests: XCTestCase {
             _ = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
             XCTFail("expected serviceUnavailable")
         } catch let error as SwitcherooUsageError {
-            XCTAssertEqual(error, .serviceUnavailable)
+            XCTAssertEqual(error, .serviceUnavailable(retryAfterSeconds: nil))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testRateLimitRetryAfterFlowsIntoUsageError() async {
+        transport.setResponse(status: 429, body: Data("{}".utf8), headers: ["retry-after": "120"])
+        do {
+            _ = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+            XCTFail("expected serviceUnavailable")
+        } catch let error as SwitcherooUsageError {
+            XCTAssertEqual(error, .serviceUnavailable(retryAfterSeconds: 120))
         } catch {
             XCTFail("unexpected error: \(error)")
         }

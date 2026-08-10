@@ -19,7 +19,7 @@ final class SwitcherooCLITests: XCTestCase {
 
         XCTAssertEqual(exitCode, 0)
         XCTAssertTrue(errors.isEmpty)
-        XCTAssertEqual(app.refreshCalls, 0)
+        XCTAssertEqual(app.refreshTriggers.count, 0)
         XCTAssertEqual(output.count, 1)
         XCTAssertTrue(output[0].contains("switcheroo list"))
         XCTAssertTrue(output[0].contains("switcheroo sync"))
@@ -34,7 +34,7 @@ final class SwitcherooCLITests: XCTestCase {
         let exitCode = cli.run(arguments: ["list"])
 
         XCTAssertEqual(exitCode, 0)
-        XCTAssertEqual(app.refreshCalls, 1)
+        XCTAssertEqual(app.refreshTriggers.count, 1)
         XCTAssertEqual(output, ["(no accounts)"])
     }
 
@@ -54,7 +54,7 @@ final class SwitcherooCLITests: XCTestCase {
         let exitCode = cli.run(arguments: ["list"])
 
         XCTAssertEqual(exitCode, 0)
-        XCTAssertEqual(app.refreshCalls, 1)
+        XCTAssertEqual(app.refreshTriggers.count, 1)
         XCTAssertEqual(output, ["* Active", "  Backup"])
     }
 
@@ -70,7 +70,7 @@ final class SwitcherooCLITests: XCTestCase {
         let exitCode = cli.run(arguments: ["current"])
 
         XCTAssertEqual(exitCode, 0)
-        XCTAssertEqual(app.refreshCalls, 1)
+        XCTAssertEqual(app.refreshTriggers.count, 1)
         XCTAssertEqual(output, ["Active"])
     }
 

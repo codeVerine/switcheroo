@@ -56,7 +56,9 @@ public enum SwitcherooAccountUsageState: Equatable, Sendable {
 public enum SwitcherooUsageError: LocalizedError, Sendable, Equatable {
     case noCredential
     case authenticationFailed
-    case serviceUnavailable
+    /// The service is busy or rate-limited; `retryAfterSeconds` carries the
+    /// server's `Retry-After` hint for 429 responses when one was provided.
+    case serviceUnavailable(retryAfterSeconds: Int?)
     case networkUnavailable
     case malformedResponse
 

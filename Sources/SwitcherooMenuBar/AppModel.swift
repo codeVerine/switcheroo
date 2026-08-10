@@ -71,7 +71,7 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         guard let app else { return }
-        app.refresh()
+        app.refresh(usageTrigger: .menuOpen)
         state = app.snapshot()
         if state.errorMessage != nil {
             clearStatusMessage()
@@ -112,7 +112,6 @@ final class AppModel: ObservableObject {
         app.deleteAccount(idOrName: accountId)
         state = app.snapshot()
     }
-
     func finalizePendingIfReady(setActive: Bool) {
         guard let app else { return }
         let result = app.finalizePendingIfReady(setActiveIfFirst: true)

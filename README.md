@@ -17,7 +17,7 @@ Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the a
 > [!IMPORTANT]
 > For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
 
-Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs, except for one read-only usage check: while the menu bar is open, it asks the Codex usage endpoint for the active account's remaining five-hour and weekly allowance (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
+Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs, except for one read-only usage check per saved account: while the menu bar is open (and after account switches), it asks the Codex usage endpoint for each account's remaining five-hour and weekly allowance (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
 
 Not affiliated with OpenAI.
 

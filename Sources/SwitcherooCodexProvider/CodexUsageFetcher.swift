@@ -40,12 +40,14 @@ public struct CodexUsageFetcher: AccountUsageFetching {
             body = try await client.get(path: "usage", credential: credential)
         } catch let error as CodexAPIClientError {
             switch error {
-            case .httpStatus(401), .httpStatus(403):
+            case .httpStatus(401, _), .httpStatus(403, _):
                 throw SwitcherooUsageError.authenticationFailed
-            case .httpStatus(429), .httpStatus(500), .httpStatus(502), .httpStatus(503), .httpStatus(504):
-                throw SwitcherooUsageError.serviceUnavailable
+            case .httpStatus(429, let retryAfterSeconds):
+                throw SwitcherooUsageError.serviceUnavailable(retryAfterSeconds: retryAfterSeconds)
+            case .httpStatus(500, _), .httpStatus(502, _), .httpStatus(503, _), .httpStatus(504, _):
+                throw SwitcherooUsageError.serviceUnavailable(retryAfterSeconds: nil)
             case .httpStatus:
-                throw SwitcherooUsageError.serviceUnavailable
+                throw SwitcherooUsageError.serviceUnavailable(retryAfterSeconds: nil)
             case .networkFailure:
                 throw SwitcherooUsageError.networkUnavailable
             case .invalidRequest, .invalidResponse:
@@ -57,7 +59,14 @@ public struct CodexUsageFetcher: AccountUsageFetching {
             throw SwitcherooUsageError.malformedResponse
         }
 
-        return map(payload: payload, accountId: accountId)
+        let usage = map(payload: payload, accountId: accountId)
+        // A structurally empty 200 response has no usable window data; treat
+        // it as malformed so the row shows unavailable instead of silently
+        // removing the usage line. A single valid window is still fine.
+        guard usage.fiveHour != nil || usage.weekly != nil else {
+            throw SwitcherooUsageError.malformedResponse
+        }
+        return usage
     }
 
     func map(payload: RateLimitStatusPayload, accountId: String) -> SwitcherooAccountUsage {

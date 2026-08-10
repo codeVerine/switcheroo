@@ -5,7 +5,12 @@ public protocol SwitcherooConfigStoring {
     func save(_ config: SwitcherooConfig) throws
 }
 
-public protocol SwitcherooSecureStoring {
+/// Backs the account auth snapshots.
+///
+/// Implementations must be thread-safe: the app may call any method from any
+/// executor (for example, batch usage preparation reads one credential per
+/// account from concurrent app activity).
+public protocol SwitcherooSecureStoring: Sendable {
     func store(_ data: Data, key: String) throws
     func load(key: String) throws -> Data
     func delete(key: String) throws

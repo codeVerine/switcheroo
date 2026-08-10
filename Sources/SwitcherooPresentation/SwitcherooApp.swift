@@ -11,6 +11,20 @@ public struct ProviderDescriptor: Hashable, Identifiable, Sendable {
     }
 }
 
+/// Why a usage refresh is being requested. Menu-open refreshes may keep fresh
+/// cached rows; account switches and account-set changes always start a new
+/// generation so old in-flight results can never land under a changed selection.
+public enum UsageRefreshTrigger: Sendable, Equatable {
+    /// Menu open, window focus, or ordinary user refresh: the freshness cache
+    /// applies and in-flight same-generation fetches are not duplicated.
+    case menuOpen
+    /// An account switch: a full all-account generation, bypassing the cache.
+    case accountSwitch
+    /// Accounts were added, imported, or deleted: a generation boundary, with
+    /// the freshness cache applying to the rows that remain live.
+    case accountSetChanged
+}
+
 public struct SwitcherooAppState: Sendable {
     public var errorMessage: String?
     public var providers: [ProviderDescriptor]
@@ -57,11 +71,15 @@ public struct SwitcherooAppState: Sendable {
 }
 
 public final class SwitcherooApp: @unchecked Sendable {
+    /// Rolling limit on concurrent usage requests per batch.
+    static let usageConcurrencyLimit = 3
+
     private let lock = NSLock()
     private let engine: SwitcherooEngine
     private let fileIO: SwitcherooFileIO
     private let usageFetcher: (any AccountUsageFetching)?
     private let usageStalenessInterval: TimeInterval
+    private let usageFailureCooldown: TimeInterval
 
     public private(set) var state: SwitcherooAppState
 
@@ -74,18 +92,22 @@ public final class SwitcherooApp: @unchecked Sendable {
     private var usageTask: Task<Void, Never>?
     private var usageProviderId: String?
     private var usageInFlightByAccount: [String: Int] = [:]
+    private var usageLastAttemptByAccount: [String: Date] = [:]
+    private var usageRetryAfterByAccount: [String: Int] = [:]
 
     public init(
         engine: SwitcherooEngine,
         fileIO: SwitcherooFileIO,
         providers: [ProviderDescriptor],
         usageFetcher: (any AccountUsageFetching)? = nil,
-        usageStalenessInterval: TimeInterval = 60
+        usageStalenessInterval: TimeInterval = 60,
+        usageFailureCooldown: TimeInterval = 30
     ) {
         self.engine = engine
         self.fileIO = fileIO
         self.usageFetcher = usageFetcher
         self.usageStalenessInterval = usageStalenessInterval
+        self.usageFailureCooldown = usageFailureCooldown
         self.state = SwitcherooAppState(providers: providers)
     }
 
@@ -94,6 +116,19 @@ public final class SwitcherooApp: @unchecked Sendable {
     }
 
     public func refresh() {
+        refresh(usageTrigger: .menuOpen)
+    }
+
+    public func refresh(usageTrigger: UsageRefreshTrigger) {
+        refreshAccountsMetadata()
+        let accountIds = withState { $0.accounts.map(\.id) }
+        refreshUsageIfNeeded(accountIds: accountIds, trigger: usageTrigger)
+    }
+
+    /// Refreshes account metadata and active status without touching usage.
+    /// This is the only path the auth-sync timer may use, so background sync
+    /// can never cause hidden usage requests while the menu is closed.
+    private func refreshAccountsMetadata() {
         do {
             let providerId = resolveSelectedProviderId()
             let accounts = try engine.listAccounts(providerId: providerId)
@@ -113,13 +148,31 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.accessTokenExpiryByAccountId = expiryById
             state.accountMetadataById = metadataById
             lock.unlock()
-
-            refreshUsageIfNeeded(accountIds: accounts.map(\.id))
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
             lock.unlock()
         }
+    }
+
+    /// Immutable batch context captured when the generation is planned, so
+    /// concurrent provider selection or account changes cannot change the
+    /// credential lookup of an in-flight batch.
+    private struct UsageBatchContext: Sendable {
+        let providerId: String?
+        let generation: Int
+        let accounts: [UsageBatchAccount]
+    }
+
+    private struct UsageBatchAccount: Sendable {
+        let accountId: String
+        let authData: Data?
+    }
+
+    private struct UsageFetchOutcome: Sendable {
+        let accountId: String
+        let state: SwitcherooAccountUsageState
+        let retryAfterSeconds: Int?
     }
 
     /// Kicks off a usage batch for all accounts when one is needed.
@@ -128,21 +181,22 @@ public final class SwitcherooApp: @unchecked Sendable {
     ///   keyed by account id so each dropdown row shows its own usage.
     /// - A bounded `.loading` state is published synchronously per account.
     /// - Repeated calls (view refresh, window focus) are cheap: accounts are
-    ///   skipped while a same-generation fetch is in flight or when a fresh
-    ///   result already exists.
-    /// - Starting a batch bumps the generation, cancels the previous batch, and
-    ///   folds any still-loading accounts into the new batch, so a slower older
-    ///   response can never overwrite a newer batch (latest-request-wins) and
-    ///   a loading row always resolves.
+    ///   skipped while a same-generation fetch is in flight, when a fresh
+    ///   result exists, or while a failed row is inside its retry cooldown.
+    /// - `.accountSwitch` bypasses those guards and always starts one
+    ///   all-account generation; `.accountSetChanged` always advances the
+    ///   generation so a deleted account's in-flight result can never publish.
     /// - One account's failure only marks that account unavailable; the other
     ///   rows keep their own results (partial-failure isolation).
-    private func refreshUsageIfNeeded(accountIds: [String]) {
+    private func refreshUsageIfNeeded(accountIds: [String], trigger: UsageRefreshTrigger) {
         guard usageFetcher != nil else {
             lock.lock()
             usageTask?.cancel()
             usageTask = nil
             usageGeneration += 1
             usageInFlightByAccount = [:]
+            usageLastAttemptByAccount = [:]
+            usageRetryAfterByAccount = [:]
             state.usageStatesByAccountId = [:]
             usageProviderId = nil
             lock.unlock()
@@ -157,6 +211,8 @@ public final class SwitcherooApp: @unchecked Sendable {
             usageTask?.cancel()
             usageGeneration += 1
             usageInFlightByAccount = [:]
+            usageLastAttemptByAccount = [:]
+            usageRetryAfterByAccount = [:]
             state.usageStatesByAccountId = [:]
             usageProviderId = providerId
         }
@@ -167,27 +223,28 @@ public final class SwitcherooApp: @unchecked Sendable {
         usageInFlightByAccount = usageInFlightByAccount.filter { liveIds.contains($0.key) }
 
         let now = Date()
-        var pending: [String] = []
-        for accountId in accountIds {
-            switch state.usageStatesByAccountId[accountId] {
-            case .loaded(let usage) where now.timeIntervalSince(usage.fetchedAt) < usageStalenessInterval:
-                continue
-            default:
-                break
+        var pending: [String]
+
+        switch trigger {
+        case .accountSwitch:
+            // Required all-account generation for a switch: bypass the
+            // freshness cache, in-flight guards, and failure cooldowns.
+            pending = accountIds
+            usageGeneration += 1
+        case .accountSetChanged:
+            // The live set changed: generation boundary even when no account
+            // needs a fetch, so superseded in-flight results cannot land.
+            pending = pendingAccounts(accountIds: accountIds, now: now, bypassCache: false)
+            usageGeneration += 1
+        case .menuOpen:
+            pending = pendingAccounts(accountIds: accountIds, now: now, bypassCache: false)
+            guard !pending.isEmpty else {
+                lock.unlock()
+                return
             }
-            if usageInFlightByAccount[accountId] == usageGeneration {
-                // A fetch for the current generation is already running.
-                continue
-            }
-            pending.append(accountId)
+            usageGeneration += 1
         }
 
-        guard !pending.isEmpty else {
-            lock.unlock()
-            return
-        }
-
-        usageGeneration += 1
         let generation = usageGeneration
 
         // Superseded in-flight fetches (older generation) would have their
@@ -198,6 +255,10 @@ public final class SwitcherooApp: @unchecked Sendable {
             }
         }
         let uniquePending = Array(Set(pending))
+        guard !uniquePending.isEmpty else {
+            lock.unlock()
+            return
+        }
 
         for accountId in uniquePending {
             usageInFlightByAccount[accountId] = generation
@@ -208,52 +269,145 @@ public final class SwitcherooApp: @unchecked Sendable {
 
         usageTask = Task { [weak self] in
             guard let self else { return }
-            await self.fetchUsageBatch(accountIds: uniquePending, generation: generation)
+            let context = await self.prepareBatchContext(
+                accountIds: uniquePending,
+                generation: generation,
+                providerId: providerId
+            )
+            await self.fetchUsageBatch(context: context)
+        }
+    }
+
+    /// Accounts that need a fetch right now: not fresh, not inside a failure
+    /// cooldown, and not already running in the current generation.
+    private func pendingAccounts(accountIds: [String], now: Date, bypassCache: Bool) -> [String] {
+        var pending: [String] = []
+        for accountId in accountIds {
+            switch state.usageStatesByAccountId[accountId] {
+            case .loaded(let usage) where !bypassCache && now.timeIntervalSince(usage.fetchedAt) < usageStalenessInterval:
+                continue
+            case .unavailable where !bypassCache && isWithinFailureCooldown(accountId: accountId, now: now):
+                continue
+            default:
+                break
+            }
+            if !bypassCache, usageInFlightByAccount[accountId] == usageGeneration {
+                continue
+            }
+            pending.append(accountId)
+        }
+        return pending
+    }
+
+    private func isWithinFailureCooldown(accountId: String, now: Date) -> Bool {
+        guard let lastAttempt = usageLastAttemptByAccount[accountId] else { return false }
+        let retryAfter = usageRetryAfterByAccount[accountId] ?? 0
+        let cooldown = max(usageFailureCooldown, TimeInterval(retryAfter))
+        return now.timeIntervalSince(lastAttempt) < cooldown
+    }
+
+    /// Reads each pending account's saved credential serially into an
+    /// immutable batch context. Per-account read failures become unavailable
+    /// results without touching the network, and no secure store is ever
+    /// entered concurrently from the network phase.
+    private func prepareBatchContext(accountIds: [String], generation: Int, providerId: String?) async -> UsageBatchContext {
+        var accounts: [UsageBatchAccount] = []
+        for accountId in accountIds {
+            let authData: Data?
+            do {
+                authData = try engine.accountAuthData(providerId: providerId, accountId: accountId)
+            } catch {
+                authData = nil
+            }
+            accounts.append(UsageBatchAccount(accountId: accountId, authData: authData))
+        }
+        return UsageBatchContext(providerId: providerId, generation: generation, accounts: accounts)
+    }
+
+    /// Runs the network phase with a small rolling concurrency limit, adding
+    /// the next child only when one completes.
+    private func fetchUsageBatch(context: UsageBatchContext) async {
+        await withTaskGroup(of: UsageFetchOutcome.self) { group in
+            var queueIndex = 0
+
+            func startNext() {
+                guard queueIndex < context.accounts.count else { return }
+                let item = context.accounts[queueIndex]
+                queueIndex += 1
+                group.addTask {
+                    await self.fetchUsageForItem(item)
+                }
+            }
+
+            for _ in 0..<min(Self.usageConcurrencyLimit, context.accounts.count) {
+                startNext()
+            }
+            for await outcome in group {
+                self.publishUsage(accountId: outcome.accountId, generation: context.generation, outcome: outcome)
+                startNext()
+            }
         }
     }
 
     /// Fetches one account's usage. Failures are isolated per account and
     /// surface as that account's unavailable state only.
-    private func fetchUsage(accountId: String) async -> SwitcherooAccountUsageState {
+    private func fetchUsageForItem(_ item: UsageBatchAccount) async -> UsageFetchOutcome {
+        guard let authData = item.authData else {
+            return UsageFetchOutcome(
+                accountId: item.accountId,
+                state: .unavailable(reason: SwitcherooUsageError.noCredential.diagnosticMessage),
+                retryAfterSeconds: nil
+            )
+        }
+
+        recordUsageAttempt(accountId: item.accountId)
         do {
-            let providerId = resolveSelectedProviderId()
-            let authData = try engine.accountAuthData(providerId: providerId, accountId: accountId)
-            let usage = try await usageFetcher?.fetchUsage(authData: authData, accountId: accountId)
-            guard let usage else { return .unavailable(reason: nil) }
-            return .loaded(usage)
+            let usage = try await usageFetcher?.fetchUsage(authData: authData, accountId: item.accountId)
+            guard let usage else {
+                return UsageFetchOutcome(accountId: item.accountId, state: .unavailable(reason: nil), retryAfterSeconds: nil)
+            }
+            return UsageFetchOutcome(accountId: item.accountId, state: .loaded(usage), retryAfterSeconds: nil)
         } catch let error as SwitcherooUsageError {
-            return .unavailable(reason: error.diagnosticMessage)
+            var retryAfterSeconds: Int?
+            if case .serviceUnavailable(let seconds) = error {
+                retryAfterSeconds = seconds
+            }
+            return UsageFetchOutcome(
+                accountId: item.accountId,
+                state: .unavailable(reason: error.diagnosticMessage),
+                retryAfterSeconds: retryAfterSeconds
+            )
         } catch {
-            return .unavailable(reason: errorMessage(from: error))
+            return UsageFetchOutcome(accountId: item.accountId, state: .unavailable(reason: nil), retryAfterSeconds: nil)
         }
     }
 
-    private func fetchUsageBatch(accountIds: [String], generation: Int) async {
-        await withTaskGroup(of: (String, SwitcherooAccountUsageState).self) { group in
-            for accountId in accountIds {
-                group.addTask { [weak self] in
-                    guard let self else { return (accountId, .unavailable(reason: nil)) }
-                    let state = await self.fetchUsage(accountId: accountId)
-                    return (accountId, state)
-                }
-            }
-            for await (accountId, state) in group {
-                self.publishUsage(accountId: accountId, generation: generation, state: state)
-            }
-        }
+    private func recordUsageAttempt(accountId: String) {
+        lock.lock()
+        usageLastAttemptByAccount[accountId] = Date()
+        lock.unlock()
     }
 
     /// Publishes a usage result only when it still belongs to the latest
-    /// batch; older responses are dropped. Live views are notified so the open
-    /// dropdown updates in place.
-    private func publishUsage(accountId: String, generation: Int, state: SwitcherooAccountUsageState) {
+    /// batch AND the account is still live; older batches and deleted accounts
+    /// are dropped. Live views are notified so the open dropdown updates.
+    private func publishUsage(accountId: String, generation: Int, outcome: UsageFetchOutcome) {
         lock.lock()
         guard generation == usageGeneration else {
             lock.unlock()
             return
         }
-        self.state.usageStatesByAccountId[accountId] = state
+        guard state.accounts.contains(where: { $0.id == accountId }) else {
+            lock.unlock()
+            return
+        }
+        self.state.usageStatesByAccountId[accountId] = outcome.state
         usageInFlightByAccount[accountId] = nil
+        if let retryAfterSeconds = outcome.retryAfterSeconds {
+            usageRetryAfterByAccount[accountId] = retryAfterSeconds
+        } else {
+            usageRetryAfterByAccount[accountId] = nil
+        }
         lock.unlock()
         onUsageUpdated?()
     }
@@ -306,7 +460,7 @@ public final class SwitcherooApp: @unchecked Sendable {
         do {
             let providerId = resolveSelectedProviderId()
             let result = try engine.importCurrentAccount(providerId: providerId, name: name, setActive: false)
-            refresh()
+            refresh(usageTrigger: .accountSetChanged)
             return result
         } catch {
             lock.lock()
@@ -321,7 +475,7 @@ public final class SwitcherooApp: @unchecked Sendable {
         do {
             let providerId = resolveSelectedProviderId()
             let result = try engine.importCurrentAccountWithDerivedName(providerId: providerId, setActiveIfFirst: setActiveIfFirst)
-            refresh()
+            refresh(usageTrigger: .accountSetChanged)
             return result
         } catch {
             lock.lock()
@@ -342,7 +496,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.pendingLogin = nil
             state.pendingHint = nil
             lock.unlock()
-            refresh()
+            refresh(usageTrigger: .accountSetChanged)
             return result
         } catch {
             lock.lock()
@@ -363,7 +517,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             state.pendingLogin = nil
             state.pendingHint = nil
             lock.unlock()
-            refresh()
+            refresh(usageTrigger: .accountSetChanged)
             return result
         } catch {
             lock.lock()
@@ -378,7 +532,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             let providerId = resolveSelectedProviderId()
             _ = try? engine.syncActiveAccountSnapshot(providerId: providerId)
             try engine.switchToAccount(providerId: providerId, accountIdOrName: idOrName)
-            refresh()
+            refresh(usageTrigger: .accountSwitch)
             setReloginRequired(false)
         } catch {
             lock.lock()
@@ -391,7 +545,7 @@ public final class SwitcherooApp: @unchecked Sendable {
         do {
             let providerId = resolveSelectedProviderId()
             try engine.deleteAccount(providerId: providerId, accountIdOrName: idOrName)
-            refresh()
+            refresh(usageTrigger: .accountSetChanged)
         } catch {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
@@ -404,7 +558,9 @@ public final class SwitcherooApp: @unchecked Sendable {
         do {
             let providerId = resolveSelectedProviderId()
             let result = try engine.syncActiveAccountSnapshot(providerId: providerId)
-            refresh()
+            // Metadata only: the auth-sync timer path must never trigger usage
+            // requests while the menu is closed.
+            refreshAccountsMetadata()
             setReloginRequired(result.requiresRelogin && shouldWarnAboutRelogin())
             return result
         } catch {

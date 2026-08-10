@@ -58,7 +58,7 @@ Try:
 
 ## "Usage unavailable" in the account dropdown
 
-Switcheroo shows the active account's remaining five-hour and weekly allowance when it can. If the usage row shows `Usage unavailable`, hover it for a hint:
+Switcheroo shows each account row's remaining five-hour and weekly allowance when it can. If a usage row shows `Usage unavailable`, hover it for a hint:
 
 - **Sign-in may have expired** - the saved access token was rejected by the usage endpoint. Make the account active and run `codex login` to refresh its saved snapshot, or use "Import logged-in account" after logging in.
 - **Could not reach the usage service (offline?)** - no network connection or the endpoint timed out. Usage will retry the next time the menu is opened.
