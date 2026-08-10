@@ -211,6 +211,45 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertTrue(fileIO.itemExists(path: journalPath))
     }
 
+    func testStartupFailsClosedForJournalWithoutPublicationMarker() throws {
+        let previousAuth = try makeCodexAuthData(refreshToken: "previous")
+        let publishedAuth = try makeCodexAuthData(refreshToken: "published")
+        let previousConfig = SwitcherooConfig()
+        let fileIO = InMemoryFileIO()
+        fileIO.files[activeAuthPath] = publishedAuth
+
+        var journalObject = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(TransactionJournal(
+                txid: "legacy-journal",
+                createdAt: Date(),
+                configCommitted: false,
+                previousConfig: previousConfig,
+                targets: [TransactionJournal.Target(id: "codex", path: activeAuthPath, previous: previousAuth, expected: publishedAuth)],
+                keychainChanges: []
+            ))
+        ) as? [String: Any])
+        var targets = try XCTUnwrap(journalObject["targets"] as? [[String: Any]])
+        targets[0].removeValue(forKey: "publicationStarted")
+        journalObject["targets"] = targets
+        fileIO.files[journalPath] = try JSONSerialization.data(withJSONObject: journalObject)
+
+        XCTAssertThrowsError(try SwitcherooEngine(
+            configStore: InMemoryConfigStore(config: previousConfig),
+            secureStore: InMemorySecureStore(),
+            fileIO: fileIO,
+            paths: InMemoryPaths(),
+            providers: [StubProvider()],
+            authTargetAdapters: [CodexAuthTargetAdapter(defaultAuthFilePath: activeAuthPath)]
+        )) { error in
+            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+                return XCTFail("Expected rollbackIncomplete, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(fileIO.files[activeAuthPath], publishedAuth)
+        XCTAssertTrue(fileIO.itemExists(path: journalPath))
+    }
+
     func testCommittedJournalCleanupFailureDoesNotTriggerRollback() throws {
         let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
             authTargetAdapters: [PiAuthTargetAdapter()]

@@ -32,7 +32,14 @@ public struct CodexAuthTargetAdapter: AuthTargetAdapter {
     public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> AuthTargetWriteResult {
         let previous = fileIO.fileExists(path: destinationPath) ? try fileIO.readFile(path: destinationPath) : nil
         if previous != sourceAuthData {
-            try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
+            do {
+                try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
+            } catch {
+                throw AuthTargetPublicationError(
+                    result: AuthTargetWriteResult(previousData: previous, writtenData: sourceAuthData),
+                    reason: error.localizedDescription
+                )
+            }
         }
         return AuthTargetWriteResult(previousData: previous, writtenData: sourceAuthData)
     }

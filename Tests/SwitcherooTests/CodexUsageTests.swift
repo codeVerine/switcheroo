@@ -109,6 +109,23 @@ final class CodexAPIClientTests: XCTestCase {
         }
     }
 
+    func testEndpointURLRejectsCleartextAuthenticatedRequests() async throws {
+        let transport = MockCodexHTTPTransport()
+        let client = makeClient(
+            baseURL: URL(string: "http://example.test/backend-api")!,
+            style: .chatgpt,
+            transport: transport
+        )
+
+        do {
+            _ = try await client.get(path: "usage", credential: credential)
+            XCTFail("expected invalidRequest")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .invalidRequest)
+        }
+        XCTAssertTrue(transport.requests.isEmpty)
+    }
+
     func testAccountIdHeaderOmittedWhenCredentialHasNoAccountId() async throws {
         let transport = MockCodexHTTPTransport()
         transport.setResponse(status: 200, body: Data("{}".utf8))
@@ -422,6 +439,18 @@ final class CodexUsageFetcherTests: XCTestCase {
         XCTAssertEqual(usage.weekly?.usedPercent, 22)
         XCTAssertEqual(usage.fiveHour?.windowSeconds, 0)
         XCTAssertNil(usage.weekly?.windowSeconds)
+    }
+
+    func testKnownMismatchedDurationDoesNotUsePositionalFallback() async throws {
+        transport.setResponse(
+            status: 200,
+            body: payload(primaryUsed: 11, primarySeconds: 604_800, secondaryUsed: 22, secondarySeconds: nil)
+        )
+
+        let usage = try await makeFetcher().fetchUsage(authData: try authData(), accountId: "acct-1")
+
+        XCTAssertNil(usage.fiveHour)
+        XCTAssertEqual(usage.weekly?.usedPercent, 11)
     }
 
     func testEmptyRateLimitPayloadThrowsMalformedResponse() async {

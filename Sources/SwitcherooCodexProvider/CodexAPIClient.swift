@@ -156,7 +156,7 @@ public struct CodexAPIClient: Sendable {
     /// or in any error the client produces.
     public func get(path: String, credential: CodexAPICredential) async throws -> Data {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
-              components.scheme != nil,
+              components.scheme?.lowercased() == "https",
               components.host != nil,
               components.query == nil,
               components.fragment == nil,

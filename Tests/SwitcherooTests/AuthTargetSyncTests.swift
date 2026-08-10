@@ -304,6 +304,23 @@ final class AuthTargetSyncTests: XCTestCase {
         XCTAssertTrue(harness.configStore.config.providers.isEmpty)
     }
 
+    func testPostPublicationDurabilityFailureStillRollsBackTarget() throws {
+        let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
+            authTargetAdapters: [PiAuthTargetAdapter()]
+        )
+        harness.fileIO.failAfterWriteOncePaths.insert(piAuthPath)
+
+        XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: secondId)) { error in
+            guard case AuthTargetSyncError.destinationWriteFailed = error else {
+                return XCTFail("Expected destinationWriteFailed, got \(error)")
+            }
+        }
+
+        XCTAssertNil(harness.fileIO.files[piAuthPath])
+        XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, "acc-first")
+        XCTAssertFalse(harness.fileIO.itemExists(path: "/tmp/switcheroo-tests/state/transaction.json"))
+    }
+
     // MARK: - Fixture
 
     private func makeTwoAccountHarness(

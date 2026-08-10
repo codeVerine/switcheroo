@@ -105,7 +105,14 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         _ = try parseDocument(existing, destinationPath: destinationPath)
 
         let merged = try AuthTargetDocument.merging(credential, into: existing, targetId: id, destinationPath: destinationPath)
-        try fileIO.writeFileAtomically(merged, path: destinationPath, permissions: 0o600)
+        do {
+            try fileIO.writeFileAtomically(merged, path: destinationPath, permissions: 0o600)
+        } catch {
+            throw AuthTargetPublicationError(
+                result: AuthTargetWriteResult(previousData: existing, writtenData: merged),
+                reason: error.localizedDescription
+            )
+        }
         return AuthTargetWriteResult(previousData: existing, writtenData: merged)
     }
 

@@ -54,6 +54,16 @@ public struct AuthTargetWriteResult: Sendable {
     }
 }
 
+public struct AuthTargetPublicationError: Error, Sendable {
+    public let result: AuthTargetWriteResult
+    public let reason: String
+
+    public init(result: AuthTargetWriteResult, reason: String) {
+        self.result = result
+        self.reason = reason
+    }
+}
+
 public extension AuthTargetAdapter {
     func restoreDestination(previous: Data?, expectedCurrent: Data, destinationPath: String, fileIO: SwitcherooFileIO) -> Bool {
         guard fileIO.fileExists(path: destinationPath) else {

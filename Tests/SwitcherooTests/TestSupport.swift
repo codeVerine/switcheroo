@@ -121,6 +121,7 @@ final class InMemoryFileIO: SwitcherooFileIO {
     private(set) var removedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
     var failWritePaths: Set<String> = []
+    var failAfterWriteOncePaths: Set<String> = []
     var failRemovePaths: Set<String> = []
     var failReadPaths: Set<String> = []
     /// Called after each successful write; lets tests simulate concurrent writers.
@@ -166,6 +167,9 @@ final class InMemoryFileIO: SwitcherooFileIO {
         files[path] = data
         writes.append((path: path, data: data, permissions: permissions))
         onWriteToPath?(path)
+        if failAfterWriteOncePaths.remove(path) != nil {
+            throw NSError(domain: "TestSupport", code: 8, userInfo: [NSLocalizedDescriptionKey: "write durability failed for test"])
+        }
     }
 
     func removeItem(path: String) throws {

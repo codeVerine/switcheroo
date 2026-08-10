@@ -333,23 +333,20 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 accessTokenExpiry: nil
             )
         }
-        let data = try readActiveAuthData(providerState: providerState, provider: provider)
-        let summary = CodexAuthParsing.summarize(authJSONData: data)
-        let accessTokenExpiry = summary?.accessTokenExpiry
-        guard authIdentityKey(from: data) != nil else {
-            return SwitcherooActiveSnapshotSyncResult(
-                disposition: .skippedNoIdentity,
-                account: nil,
-                accessTokenExpiry: accessTokenExpiry
-            )
-        }
-
         let active = providerState.activeAccountId.flatMap { id in
             providerState.accounts.first(where: { $0.id == id })
         }
+        var accessTokenExpiry: Date?
+        var sourceHasIdentity = false
         let result = try upsertAuthSnapshot(
             provider: provider,
-            authData: data,
+            authData: nil,
+            loadAuthData: { currentProviderState in
+                let data = try self.readActiveAuthData(providerState: currentProviderState, provider: provider)
+                accessTokenExpiry = CodexAuthParsing.summarize(authJSONData: data)?.accessTokenExpiry
+                sourceHasIdentity = self.authIdentityKey(from: data) != nil
+                return data
+            },
             newAccountId: active?.id ?? UUID().uuidString,
             newAccountName: active?.name ?? "Active account",
             allowCreate: false,
@@ -358,11 +355,15 @@ public final class SwitcherooEngine: @unchecked Sendable {
             writeActiveAuthFileWhenActivated: false
         )
         let disposition: SwitcherooActiveSnapshotSyncDisposition
-        switch result.disposition {
-        case .updatedExisting, .created:
-            disposition = .updatedExisting
-        case .skippedUnmatchedIdentity:
-            disposition = .skippedUnmatchedIdentity
+        if !sourceHasIdentity {
+            disposition = .skippedNoIdentity
+        } else {
+            switch result.disposition {
+            case .updatedExisting, .created:
+                disposition = .updatedExisting
+            case .skippedUnmatchedIdentity:
+                disposition = .skippedUnmatchedIdentity
+            }
         }
 
         return SwitcherooActiveSnapshotSyncResult(
@@ -395,7 +396,8 @@ public final class SwitcherooEngine: @unchecked Sendable {
 
     private func upsertAuthSnapshot(
         provider: any AgentProvider,
-        authData: Data,
+        authData: Data?,
+        loadAuthData: ((SwitcherooProvider) throws -> Data)? = nil,
         newAccountId: String,
         newAccountName: String,
         allowCreate: Bool,
@@ -403,7 +405,6 @@ public final class SwitcherooEngine: @unchecked Sendable {
         activateIfFirst: Bool,
         writeActiveAuthFileWhenActivated: Bool
     ) throws -> SwitcherooAccountWriteResult {
-        let identityKey = authIdentityKey(from: authData)
         var result = SwitcherooAccountWriteResult(disposition: .skippedUnmatchedIdentity, account: nil)
 
         try performTransaction {
@@ -414,6 +415,16 @@ public final class SwitcherooEngine: @unchecked Sendable {
             }
 
             var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+            let loadedAuthData: Data?
+            if let authData {
+                loadedAuthData = authData
+            } else {
+                loadedAuthData = try loadAuthData?(providerState)
+            }
+            guard let sourceAuthData = loadedAuthData else {
+                throw SwitcherooError.invalidAuthFile(path: provider.defaultActiveAuthFilePath)
+            }
+            let identityKey = authIdentityKey(from: sourceAuthData)
             let willWriteActiveFile = writeActiveAuthFileWhenActivated
                 && (activate || activateIfFirst && !hasActiveAccount(providerState))
 
@@ -448,9 +459,10 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 return TransactionPlan(
                     previousConfig: previousConfig,
                     nextConfig: next,
-                    keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: previousStoredData)],
+                    keychainChanges: [KeychainChange(op: .store(sourceAuthData), key: key, previous: previousStoredData)],
+                    journaled: willWriteActiveFile,
                     prepareTargets: willWriteActiveFile ? {
-                        try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
+                        try self.prepareTargetDocuments(fromAuthData: sourceAuthData, providerState: providerState)
                     } : { [] },
                     mutateConfig: { _ in }
                 )
@@ -462,6 +474,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     previousConfig: previousConfig,
                     nextConfig: previousConfig,
                     keychainChanges: [],
+                    journaled: false,
                     prepareTargets: { [] },
                     mutateConfig: { _ in }
                 )
@@ -481,9 +494,10 @@ public final class SwitcherooEngine: @unchecked Sendable {
             return TransactionPlan(
                 previousConfig: previousConfig,
                 nextConfig: next,
-                keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: nil)],
+                keychainChanges: [KeychainChange(op: .store(sourceAuthData), key: key, previous: nil)],
+                journaled: willWriteActiveFile,
                 prepareTargets: willWriteActiveFile ? {
-                    try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
+                    try self.prepareTargetDocuments(fromAuthData: sourceAuthData, providerState: providerState)
                 } : { [] },
                 mutateConfig: { _ in }
             )
@@ -699,8 +713,25 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let previousConfig: SwitcherooConfig
         let nextConfig: SwitcherooConfig
         let keychainChanges: [KeychainChange]
+        let journaled: Bool
         let prepareTargets: () throws -> [PreparedTarget]
         let mutateConfig: (inout SwitcherooConfig) throws -> Void
+
+        init(
+            previousConfig: SwitcherooConfig,
+            nextConfig: SwitcherooConfig,
+            keychainChanges: [KeychainChange],
+            journaled: Bool = true,
+            prepareTargets: @escaping () throws -> [PreparedTarget],
+            mutateConfig: @escaping (inout SwitcherooConfig) throws -> Void
+        ) {
+            self.previousConfig = previousConfig
+            self.nextConfig = nextConfig
+            self.keychainChanges = keychainChanges
+            self.journaled = journaled
+            self.prepareTargets = prepareTargets
+            self.mutateConfig = mutateConfig
+        }
     }
 
     private func performTransaction(
@@ -780,34 +811,62 @@ public final class SwitcherooEngine: @unchecked Sendable {
         willWrite: (Int) throws -> Void,
         didWrite: (Int, AuthTargetWriteResult) throws -> Void
     ) throws -> [WrittenTarget] {
+        func rollbackAndThrow(item: PreparedTarget, written: [WrittenTarget], reason: String) throws -> Never {
+            let unrecoverable = restoreTargetFiles(written)
+            if !unrecoverable.isEmpty {
+                throw TargetRollbackIncomplete(unrestoredPaths: unrecoverable)
+            }
+            throw AuthTargetSyncError.destinationWriteFailed(
+                targetId: item.adapter.id,
+                path: item.destinationPath,
+                reason: reason
+            )
+        }
+
         var written: [WrittenTarget] = []
         for (index, item) in prepared.enumerated() {
-            let result: AuthTargetWriteResult
             do {
                 try willWrite(index)
+            } catch {
+                try rollbackAndThrow(item: item, written: written, reason: error.localizedDescription)
+            }
+
+            let result: AuthTargetWriteResult
+            do {
                 result = try item.adapter.writeDestination(
                     credential: item.credential,
                     sourceAuthData: item.sourceAuthData,
                     destinationPath: item.destinationPath,
                     fileIO: fileIO
                 )
+            } catch let error as AuthTargetPublicationError {
+                let published = error.result
                 written.append(WrittenTarget(
                     adapter: item.adapter,
                     destinationPath: item.destinationPath,
-                    previous: result.previousData,
-                    writtenData: result.writtenData
+                    previous: published.previousData,
+                    writtenData: published.writtenData
                 ))
+                do {
+                    try didWrite(index, published)
+                } catch {
+                    try rollbackAndThrow(item: item, written: written, reason: error.localizedDescription)
+                }
+                try rollbackAndThrow(item: item, written: written, reason: error.reason)
+            } catch {
+                try rollbackAndThrow(item: item, written: written, reason: error.localizedDescription)
+            }
+
+            written.append(WrittenTarget(
+                adapter: item.adapter,
+                destinationPath: item.destinationPath,
+                previous: result.previousData,
+                writtenData: result.writtenData
+            ))
+            do {
                 try didWrite(index, result)
             } catch {
-                let unrecoverable = restoreTargetFiles(written)
-                if !unrecoverable.isEmpty {
-                    throw TargetRollbackIncomplete(unrestoredPaths: unrecoverable)
-                }
-                throw AuthTargetSyncError.destinationWriteFailed(
-                    targetId: item.adapter.id,
-                    path: item.destinationPath,
-                    reason: error.localizedDescription
-                )
+                try rollbackAndThrow(item: item, written: written, reason: error.localizedDescription)
             }
         }
         return written
@@ -895,6 +954,10 @@ public final class SwitcherooEngine: @unchecked Sendable {
             try reconcilePendingTransactionsLocked()
 
             let plan = try buildPlan()
+            if !plan.journaled {
+                try performUnjournaledTransaction(plan)
+                return
+            }
             let preparedTargets = try plan.prepareTargets()
 
             var journal = TransactionJournal(
@@ -972,6 +1035,32 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
     }
 
+    private func performUnjournaledTransaction(_ plan: TransactionPlan) throws {
+        guard !plan.keychainChanges.isEmpty || plan.nextConfig != plan.previousConfig else { return }
+
+        var next = plan.nextConfig
+        var appliedChanges: [KeychainChange] = []
+        do {
+            for change in plan.keychainChanges {
+                try applyKeychainChange(change)
+                appliedChanges.append(change)
+            }
+            try plan.mutateConfig(&next)
+            try persist(next)
+        } catch {
+            let failures = rollbackKeychainAndConfig(
+                appliedChanges: appliedChanges,
+                previousConfig: plan.previousConfig
+            )
+            if failures.isEmpty {
+                throw error
+            }
+            throw AuthTargetSyncError.rollbackIncomplete(
+                message: "Account update failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; "))."
+            )
+        }
+    }
+
     /// Undo every published mutation in reverse order, collecting every failure
     /// (targets, Keychain, config) so none is silently discarded.
     private func rollbackEverything(writtenTargets: [WrittenTarget], appliedChanges: [KeychainChange], previousConfig: SwitcherooConfig) -> [String] {
@@ -1034,7 +1123,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
             return
         }
 
-        if journal.targets.contains(where: { $0.publicationStarted && $0.expected == nil }) {
+        if journal.targets.contains(where: { !$0.publicationMarkerPresent || ($0.publicationStarted && $0.expected == nil) }) {
             throw AuthTargetSyncError.rollbackIncomplete(
                 message: "Recovery of an interrupted account switch is incomplete because published auth bytes are unavailable. Fix or remove the affected transaction journal at \(path), then switch again."
             )
@@ -1078,7 +1167,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
     }
 
     private func restoreJournalTarget(_ target: TransactionJournal.Target) -> Bool {
-        guard target.publicationStarted else { return true }
+        guard target.publicationMarkerPresent, target.publicationStarted else { return true }
         guard let expected = target.expected else { return false }
         let providerStates = withConfig { $0.providers }
         let adapter = authTargetAdapters.first(where: { $0.id == target.id })
