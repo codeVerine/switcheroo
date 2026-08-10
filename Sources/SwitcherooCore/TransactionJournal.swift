@@ -11,12 +11,14 @@ struct TransactionJournal: Codable {
         var path: String
         var previous: Data?
         var expected: Data?
+        var publicationStarted: Bool
 
-        init(id: String = "unknown", path: String, previous: Data?, expected: Data? = nil) {
+        init(id: String = "unknown", path: String, previous: Data?, expected: Data? = nil, publicationStarted: Bool? = nil) {
             self.id = id
             self.path = path
             self.previous = previous
             self.expected = expected
+            self.publicationStarted = publicationStarted ?? (expected != nil)
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -24,6 +26,7 @@ struct TransactionJournal: Codable {
             case path
             case previous
             case expected
+            case publicationStarted
         }
 
         init(from decoder: Decoder) throws {
@@ -32,6 +35,7 @@ struct TransactionJournal: Codable {
             path = try container.decode(String.self, forKey: .path)
             previous = try container.decodeIfPresent(Data.self, forKey: .previous)
             expected = try container.decodeIfPresent(Data.self, forKey: .expected)
+            publicationStarted = (try container.decodeIfPresent(Bool.self, forKey: .publicationStarted)) ?? (expected != nil)
         }
     }
 

@@ -84,6 +84,31 @@ final class CodexAPIClientTests: XCTestCase {
         XCTAssertEqual(request.url.absoluteString, "https://api.openai.com/api/codex/usage")
     }
 
+    func testEndpointURLNormalizesTrailingSlashAndRejectsComponents() async throws {
+        let transport = MockCodexHTTPTransport()
+        transport.setResponse(status: 200, body: Data("{}".utf8))
+        let client = makeClient(
+            baseURL: URL(string: "https://example.test/backend-api/")!,
+            style: .chatgpt,
+            transport: transport
+        )
+
+        _ = try await client.get(path: "/usage", credential: credential)
+        XCTAssertEqual(transport.requests.first?.url.absoluteString, "https://example.test/backend-api/wham/usage")
+
+        let invalidClient = makeClient(
+            baseURL: URL(string: "https://example.test/backend-api?unsafe=true")!,
+            style: .chatgpt,
+            transport: transport
+        )
+        do {
+            _ = try await invalidClient.get(path: "usage", credential: credential)
+            XCTFail("expected invalidRequest")
+        } catch let error as CodexAPIClientError {
+            XCTAssertEqual(error, .invalidRequest)
+        }
+    }
+
     func testAccountIdHeaderOmittedWhenCredentialHasNoAccountId() async throws {
         let transport = MockCodexHTTPTransport()
         transport.setResponse(status: 200, body: Data("{}".utf8))

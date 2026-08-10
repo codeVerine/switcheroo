@@ -59,9 +59,11 @@ public extension AuthTargetAdapter {
         guard fileIO.fileExists(path: destinationPath) else {
             return previous == nil
         }
-        guard let current = try? fileIO.readFile(path: destinationPath), current == expectedCurrent else {
+        guard let current = try? fileIO.readFile(path: destinationPath) else {
             return false
         }
+        if let previous, current == previous { return true }
+        guard current == expectedCurrent else { return false }
         do {
             if let previous {
                 try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)

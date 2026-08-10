@@ -155,7 +155,18 @@ public struct CodexAPIClient: Sendable {
     /// The credential is only ever placed in request headers, never in the URL
     /// or in any error the client produces.
     public func get(path: String, credential: CodexAPICredential) async throws -> Data {
-        guard let url = URL(string: "\(baseURL.absoluteString)\(pathStyle.pathPrefix)/\(path)") else {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              components.scheme != nil,
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil,
+              !path.contains("?") && !path.contains("#") else {
+            throw CodexAPIClientError.invalidRequest
+        }
+        let segments = [components.path, pathStyle.pathPrefix, path]
+            .flatMap { $0.split(separator: "/", omittingEmptySubsequences: true).map(String.init) }
+        components.path = "/" + segments.joined(separator: "/")
+        guard let url = components.url else {
             throw CodexAPIClientError.invalidRequest
         }
 

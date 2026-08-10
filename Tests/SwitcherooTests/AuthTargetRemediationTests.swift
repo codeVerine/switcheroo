@@ -172,6 +172,45 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertTrue(fileIO.itemExists(path: journalPath))
     }
 
+    func testStartupFailsClosedWhenPublicationBytesAreMissing() throws {
+        let previousAuth = try makeCodexAuthData(refreshToken: "previous")
+        let publishedAuth = try makeCodexAuthData(refreshToken: "published")
+        let previousConfig = SwitcherooConfig()
+        let fileIO = InMemoryFileIO()
+        fileIO.files[activeAuthPath] = publishedAuth
+        fileIO.files[journalPath] = try JSONEncoder().encode(TransactionJournal(
+            txid: "crash-before-journal-callback",
+            createdAt: Date(),
+            configCommitted: false,
+            previousConfig: previousConfig,
+            targets: [
+                TransactionJournal.Target(
+                    id: "codex",
+                    path: activeAuthPath,
+                    previous: previousAuth,
+                    publicationStarted: true
+                ),
+            ],
+            keychainChanges: []
+        ))
+
+        XCTAssertThrowsError(try SwitcherooEngine(
+            configStore: InMemoryConfigStore(config: previousConfig),
+            secureStore: InMemorySecureStore(),
+            fileIO: fileIO,
+            paths: InMemoryPaths(),
+            providers: [StubProvider()],
+            authTargetAdapters: [CodexAuthTargetAdapter(defaultAuthFilePath: activeAuthPath)]
+        )) { error in
+            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+                return XCTFail("Expected rollbackIncomplete, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(fileIO.files[activeAuthPath], publishedAuth)
+        XCTAssertTrue(fileIO.itemExists(path: journalPath))
+    }
+
     func testCommittedJournalCleanupFailureDoesNotTriggerRollback() throws {
         let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
             authTargetAdapters: [PiAuthTargetAdapter()]

@@ -92,6 +92,18 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         assertUnsupported(data, reasonContains: "no expiry")
     }
 
+    func testConversionRejectsOutOfRangeExpiry() throws {
+        let data = try makeTokensData([
+            "access_token": makeJWT(payload: [
+                "exp": 1e20,
+                "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+            ]),
+            "refresh_token": "refresh",
+        ])
+
+        assertUnsupported(data, reasonContains: "expiry is out of range")
+    }
+
     // MARK: - Locked publication
 
     func testWriteDestinationPreservesUnrelatedProvidersAndReplacesOnlyOpenaiCodex() throws {
@@ -172,6 +184,27 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
         XCTAssertFalse(fileIO.itemExists(path: "\(path).lock"))
         XCTAssertFalse((try JSONSerialization.jsonObject(with: written.writtenData) as? [String: Any])?.isEmpty ?? true)
+    }
+
+    func testLockHeartbeatRefreshesOwnership() throws {
+        let originalStaleThreshold = PiAuthFileLock.staleThreshold
+        let originalHeartbeatInterval = PiAuthFileLock.heartbeatInterval
+        PiAuthFileLock.staleThreshold = 0.12
+        PiAuthFileLock.heartbeatInterval = 0.02
+        defer {
+            PiAuthFileLock.staleThreshold = originalStaleThreshold
+            PiAuthFileLock.heartbeatInterval = originalHeartbeatInterval
+        }
+
+        let fileIO = InMemoryFileIO()
+        let lockPath = "~/.pi/agent/auth.json.lock"
+        let lock = try PiAuthFileLock.acquire(path: "~/.pi/agent/auth.json", fileIO: fileIO)
+        let initialDate = try XCTUnwrap(fileIO.modificationDates[lockPath])
+        Thread.sleep(forTimeInterval: 0.08)
+        let refreshedDate = try XCTUnwrap(fileIO.modificationDates[lockPath])
+        lock.release()
+
+        XCTAssertGreaterThan(refreshedDate, initialDate)
     }
 
     // MARK: - Destination validation

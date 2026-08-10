@@ -164,24 +164,31 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)
 
-        var next = withConfig { $0 }
-        var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
-
-        guard providerState.accounts.contains(where: { $0.id == accountId }) else {
-            throw SwitcherooError.accountNotFound
-        }
-
-        providerState.accounts = providerState.accounts.map { acc in
-            var copy = acc
-            if copy.id == accountId {
-                copy.name = newName
+        try performTransaction {
+            let previousConfig = try loadConfigForTransaction()
+            var providerState = previousConfig.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+            guard providerState.accounts.contains(where: { $0.id == accountId }) else {
+                throw SwitcherooError.accountNotFound
             }
-            return copy
-        }
 
-        next.providers.removeAll(where: { $0.id == provider.id })
-        next.providers.append(providerState)
-        try persist(next)
+            providerState.accounts = providerState.accounts.map { acc in
+                var copy = acc
+                if copy.id == accountId {
+                    copy.name = newName
+                }
+                return copy
+            }
+
+            var next = previousConfig
+            replaceProviderState(providerState, in: &next)
+            return TransactionPlan(
+                previousConfig: previousConfig,
+                nextConfig: next,
+                keychainChanges: [],
+                prepareTargets: { [] },
+                mutateConfig: { _ in }
+            )
+        }
     }
 
     public func accessTokenExpiryByAccountId(providerId: String? = nil) throws -> [String: Date] {
@@ -276,23 +283,37 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)
 
-        var next = withConfig { $0 }
-        var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+        try performTransaction {
+            let previousConfig = try loadConfigForTransaction()
+            var providerState = previousConfig.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
 
-        guard let target = resolveAccount(in: providerState, idOrName: accountIdOrName) else {
-            throw SwitcherooError.accountNotFound
+            guard let target = resolveAccount(in: providerState, idOrName: accountIdOrName) else {
+                throw SwitcherooError.accountNotFound
+            }
+
+            let key = secureStoreKey(providerId: provider.id, accountId: target.id)
+            let previousStoredData: Data?
+            if try secureStore.itemExists(key: key) {
+                previousStoredData = try secureStore.load(key: key)
+            } else {
+                previousStoredData = nil
+            }
+
+            providerState.accounts.removeAll(where: { $0.id == target.id })
+            if providerState.activeAccountId == target.id {
+                providerState.activeAccountId = nil
+            }
+
+            var next = previousConfig
+            replaceProviderState(providerState, in: &next)
+            return TransactionPlan(
+                previousConfig: previousConfig,
+                nextConfig: next,
+                keychainChanges: [KeychainChange(op: .delete, key: key, previous: previousStoredData)],
+                prepareTargets: { [] },
+                mutateConfig: { _ in }
+            )
         }
-
-        providerState.accounts.removeAll(where: { $0.id == target.id })
-        if providerState.activeAccountId == target.id {
-            providerState.activeAccountId = nil
-        }
-
-        next.providers.removeAll(where: { $0.id == provider.id })
-        next.providers.append(providerState)
-        try persist(next)
-
-        try secureStore.delete(key: secureStoreKey(providerId: provider.id, accountId: target.id))
     }
 
     public func syncActiveAccountSnapshotIfNeeded(providerId: String? = nil) throws -> Bool {
@@ -383,96 +404,92 @@ public final class SwitcherooEngine: @unchecked Sendable {
         writeActiveAuthFileWhenActivated: Bool
     ) throws -> SwitcherooAccountWriteResult {
         let identityKey = authIdentityKey(from: authData)
-        let previousConfig = withConfig { $0 }
-        var next = previousConfig
-        if next.defaultProviderId == nil {
-            next.defaultProviderId = provider.id
-        }
+        var result = SwitcherooAccountWriteResult(disposition: .skippedUnmatchedIdentity, account: nil)
 
-        var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
-        let willWriteActiveFile = writeActiveAuthFileWhenActivated
-            && (activate || activateIfFirst && !hasActiveAccount(providerState))
+        try performTransaction {
+            let previousConfig = try loadConfigForTransaction()
+            var next = previousConfig
+            if next.defaultProviderId == nil {
+                next.defaultProviderId = provider.id
+            }
 
-        if let existing = matchingAccount(identityKey: identityKey, providerId: provider.id, providerState: &providerState) {
-            let key = secureStoreKey(providerId: provider.id, accountId: existing.id)
-            // Capture the pre-image up front; a load failure aborts before any
-            // mutation instead of producing an incomplete rollback pre-image.
-            let previousStoredData: Data?
-            if try secureStore.itemExists(key: key) {
-                previousStoredData = try secureStore.load(key: key)
-            } else {
-                previousStoredData = nil
+            var providerState = next.providers.first(where: { $0.id == provider.id }) ?? SwitcherooProvider(id: provider.id)
+            let willWriteActiveFile = writeActiveAuthFileWhenActivated
+                && (activate || activateIfFirst && !hasActiveAccount(providerState))
+
+            if let existing = matchingAccount(identityKey: identityKey, providerId: provider.id, providerState: &providerState) {
+                let key = secureStoreKey(providerId: provider.id, accountId: existing.id)
+                let previousStoredData: Data?
+                if try secureStore.itemExists(key: key) {
+                    previousStoredData = try secureStore.load(key: key)
+                } else {
+                    previousStoredData = nil
+                }
+
+                let shouldActivate = activate || activateIfFirst && !hasActiveAccount(providerState)
+                var affected: SwitcherooAccount?
+                providerState.accounts = providerState.accounts.map { account in
+                    var copy = account
+                    if copy.id == existing.id {
+                        copy.identityKey = copy.identityKey ?? identityKey
+                        if shouldActivate {
+                            copy.lastUsedAt = Date()
+                        }
+                        affected = copy
+                    }
+                    return copy
+                }
+
+                if shouldActivate {
+                    providerState.activeAccountId = existing.id
+                }
+                replaceProviderState(providerState, in: &next)
+                result = SwitcherooAccountWriteResult(disposition: .updatedExisting, account: affected ?? existing)
+                return TransactionPlan(
+                    previousConfig: previousConfig,
+                    nextConfig: next,
+                    keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: previousStoredData)],
+                    prepareTargets: willWriteActiveFile ? {
+                        try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
+                    } : { [] },
+                    mutateConfig: { _ in }
+                )
+            }
+
+            guard allowCreate else {
+                result = SwitcherooAccountWriteResult(disposition: .skippedUnmatchedIdentity, account: nil)
+                return TransactionPlan(
+                    previousConfig: previousConfig,
+                    nextConfig: previousConfig,
+                    keychainChanges: [],
+                    prepareTargets: { [] },
+                    mutateConfig: { _ in }
+                )
             }
 
             let shouldActivate = activate || activateIfFirst && !hasActiveAccount(providerState)
-            var affected: SwitcherooAccount?
-            providerState.accounts = providerState.accounts.map { account in
-                var copy = account
-                if copy.id == existing.id {
-                    copy.identityKey = copy.identityKey ?? identityKey
-                    if shouldActivate {
-                        copy.lastUsedAt = Date()
-                    }
-                    affected = copy
-                }
-                return copy
-            }
+            var account = SwitcherooAccount(id: newAccountId, name: newAccountName, identityKey: identityKey)
+            account.lastUsedAt = shouldActivate ? Date() : nil
 
+            let key = secureStoreKey(providerId: provider.id, accountId: account.id)
+            providerState.accounts.append(account)
             if shouldActivate {
-                providerState.activeAccountId = existing.id
-                if willWriteActiveFile {
-                    try performTransaction(
-                        nextConfig: next,
-                        previousConfig: previousConfig,
-                        keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: previousStoredData)],
-                        prepareTargets: {
-                            try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
-                        }
-                    ) { config in
-                        self.replaceProviderState(providerState, in: &config)
-                    }
-                    return SwitcherooAccountWriteResult(disposition: .updatedExisting, account: affected ?? existing)
-                }
+                providerState.activeAccountId = account.id
             }
-
-            try secureStore.store(authData, key: key)
             replaceProviderState(providerState, in: &next)
-            try persist(next)
-            return SwitcherooAccountWriteResult(disposition: .updatedExisting, account: affected ?? existing)
+            result = SwitcherooAccountWriteResult(disposition: .created, account: account)
+            return TransactionPlan(
+                previousConfig: previousConfig,
+                nextConfig: next,
+                keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: nil)],
+                prepareTargets: willWriteActiveFile ? {
+                    try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
+                } : { [] },
+                mutateConfig: { _ in }
+            )
         }
 
-        guard allowCreate else {
-            return SwitcherooAccountWriteResult(disposition: .skippedUnmatchedIdentity, account: nil)
-        }
-
-        let shouldActivate = activate || activateIfFirst && !hasActiveAccount(providerState)
-        var account = SwitcherooAccount(id: newAccountId, name: newAccountName, identityKey: identityKey)
-        account.lastUsedAt = shouldActivate ? Date() : nil
-
-        let key = secureStoreKey(providerId: provider.id, accountId: account.id)
-        providerState.accounts.append(account)
-
-        if shouldActivate {
-            providerState.activeAccountId = account.id
-            if willWriteActiveFile {
-                try performTransaction(
-                    nextConfig: next,
-                    previousConfig: previousConfig,
-                    keychainChanges: [KeychainChange(op: .store(authData), key: key, previous: nil)],
-                    prepareTargets: {
-                        try self.prepareTargetDocuments(fromAuthData: authData, providerState: providerState)
-                    }
-                ) { config in
-                    self.replaceProviderState(providerState, in: &config)
-                }
-                return SwitcherooAccountWriteResult(disposition: .created, account: account)
-            }
-        }
-
-        try secureStore.store(authData, key: key)
-        replaceProviderState(providerState, in: &next)
-        try persist(next)
-        return SwitcherooAccountWriteResult(disposition: .created, account: account)
+        return result
     }
 
     private func matchingAccount(
@@ -760,12 +777,14 @@ public final class SwitcherooEngine: @unchecked Sendable {
     /// targets that cannot be restored are reported by the caller.
     private func writeTargetDocuments(
         _ prepared: [PreparedTarget],
+        willWrite: (Int) throws -> Void,
         didWrite: (Int, AuthTargetWriteResult) throws -> Void
     ) throws -> [WrittenTarget] {
         var written: [WrittenTarget] = []
         for (index, item) in prepared.enumerated() {
             let result: AuthTargetWriteResult
             do {
+                try willWrite(index)
                 result = try item.adapter.writeDestination(
                     credential: item.credential,
                     sourceAuthData: item.sourceAuthData,
@@ -909,7 +928,10 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     appliedChanges.append(change)
                 }
 
-                writtenTargets = try writeTargetDocuments(preparedTargets) { index, result in
+                writtenTargets = try writeTargetDocuments(preparedTargets, willWrite: { index in
+                    journal.targets[index].publicationStarted = true
+                    try writeJournal(journal)
+                }) { index, result in
                     journal.targets[index].previous = result.previousData
                     journal.targets[index].expected = result.writtenData
                     try writeJournal(journal)
@@ -1012,6 +1034,12 @@ public final class SwitcherooEngine: @unchecked Sendable {
             return
         }
 
+        if journal.targets.contains(where: { $0.publicationStarted && $0.expected == nil }) {
+            throw AuthTargetSyncError.rollbackIncomplete(
+                message: "Recovery of an interrupted account switch is incomplete because published auth bytes are unavailable. Fix or remove the affected transaction journal at \(path), then switch again."
+            )
+        }
+
         var failures: [String] = []
         for target in journal.targets {
             if !restoreJournalTarget(target) {
@@ -1035,7 +1063,13 @@ public final class SwitcherooEngine: @unchecked Sendable {
             lock.lock()
             config = journal.previousConfig
             lock.unlock()
-            try? fileIO.removeItem(path: path)
+            do {
+                try fileIO.removeItem(path: path)
+            } catch {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Recovery succeeded but the transaction journal at \(path) could not be removed. Retry the operation so recovery can finish."
+                )
+            }
         } else {
             throw AuthTargetSyncError.rollbackIncomplete(
                 message: "Recovery of an interrupted account switch failed. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(path)."
@@ -1044,7 +1078,8 @@ public final class SwitcherooEngine: @unchecked Sendable {
     }
 
     private func restoreJournalTarget(_ target: TransactionJournal.Target) -> Bool {
-        guard let expected = target.expected else { return true }
+        guard target.publicationStarted else { return true }
+        guard let expected = target.expected else { return false }
         let providerStates = withConfig { $0.providers }
         let adapter = authTargetAdapters.first(where: { $0.id == target.id })
             ?? authTargetAdapters.first(where: { adapter in

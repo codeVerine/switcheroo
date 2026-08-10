@@ -52,6 +52,12 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         guard let expiry = summary.accessTokenExpiry else {
             throw AuthTargetSyncError.unsupportedSource(targetId: id, reason: "source auth access token has no expiry")
         }
+        let expiryMilliseconds = expiry.timeIntervalSince1970 * 1000
+        guard expiryMilliseconds.isFinite,
+              expiryMilliseconds >= Double(Int64.min),
+              expiryMilliseconds < Double(Int64.max) else {
+            throw AuthTargetSyncError.unsupportedSource(targetId: id, reason: "source auth access token expiry is out of range")
+        }
         // Pi reads chatgpt_account_id from the access token; a credential whose
         // access token lacks the claim is unusable in Pi.
         guard let accountId = summary.accessTokenChatgptAccountId, !accountId.isEmpty else {
@@ -70,7 +76,7 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
                 "type": .string("oauth"),
                 "access": .string(access),
                 "refresh": .string(refresh),
-                "expires": .integer(Int64(expiry.timeIntervalSince1970 * 1000)),
+                "expires": .integer(Int64(expiryMilliseconds)),
                 "accountId": .string(accountId),
             ])
         )
@@ -112,9 +118,11 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         guard fileIO.fileExists(path: destinationPath) else {
             return previous == nil
         }
-        guard let current = try? fileIO.readFile(path: destinationPath), current == expectedCurrent else {
+        guard let current = try? fileIO.readFile(path: destinationPath) else {
             return false
         }
+        if let previous, current == previous { return true }
+        guard current == expectedCurrent else { return false }
         do {
             if let previous {
                 try fileIO.writeFileAtomically(previous, path: destinationPath, permissions: 0o600)
@@ -173,9 +181,44 @@ struct PiAuthFileLock {
     nonisolated(unsafe) static var staleThreshold: TimeInterval = 30
     nonisolated(unsafe) static var acquireDeadline: TimeInterval = 30
     nonisolated(unsafe) static var pollInterval: TimeInterval = 0.05
+    nonisolated(unsafe) static var heartbeatInterval: TimeInterval = 5
 
     let lockPath: String
     private let fileIO: SwitcherooFileIO
+    private let heartbeat: Heartbeat
+
+    private final class Heartbeat: @unchecked Sendable {
+        private let timer: DispatchSourceTimer
+
+        private final class FileIOBox: @unchecked Sendable {
+            let value: SwitcherooFileIO
+
+            init(_ value: SwitcherooFileIO) {
+                self.value = value
+            }
+        }
+
+        init(lockPath: String, fileIO: SwitcherooFileIO, interval: TimeInterval) {
+            let fileIOBox = FileIOBox(fileIO)
+            timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "switcheroo.pi-auth-lock-heartbeat"))
+            timer.setEventHandler { [fileIOBox, lockPath] in
+                try? fileIOBox.value.setModificationDate(path: lockPath, date: Date())
+            }
+            timer.schedule(deadline: .now() + interval, repeating: interval)
+            timer.resume()
+        }
+
+        func stop() {
+            timer.cancel()
+        }
+    }
+
+    private init(lockPath: String, fileIO: SwitcherooFileIO) {
+        self.lockPath = lockPath
+        self.fileIO = fileIO
+        let interval = max(0.01, min(Self.heartbeatInterval, Self.staleThreshold / 3))
+        self.heartbeat = Heartbeat(lockPath: lockPath, fileIO: fileIO, interval: interval)
+    }
 
     static func acquire(path: String, fileIO: SwitcherooFileIO) throws -> PiAuthFileLock {
         let parent = (path as NSString).deletingLastPathComponent
@@ -212,6 +255,7 @@ struct PiAuthFileLock {
     }
 
     func release() {
+        heartbeat.stop()
         try? fileIO.removeItem(path: lockPath)
     }
 

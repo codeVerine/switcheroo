@@ -80,6 +80,7 @@ public final class SwitcherooApp: @unchecked Sendable {
     private let usageFetcher: (any AccountUsageFetching)?
     private let usageStalenessInterval: TimeInterval
     private let usageFailureCooldown: TimeInterval
+    private let clock: @Sendable () -> Date
 
     public private(set) var state: SwitcherooAppState
 
@@ -101,13 +102,15 @@ public final class SwitcherooApp: @unchecked Sendable {
         providers: [ProviderDescriptor],
         usageFetcher: (any AccountUsageFetching)? = nil,
         usageStalenessInterval: TimeInterval = 60,
-        usageFailureCooldown: TimeInterval = 30
+        usageFailureCooldown: TimeInterval = 30,
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.engine = engine
         self.fileIO = fileIO
         self.usageFetcher = usageFetcher
         self.usageStalenessInterval = usageStalenessInterval
         self.usageFailureCooldown = usageFailureCooldown
+        self.clock = clock
         self.state = SwitcherooAppState(providers: providers)
     }
 
@@ -222,7 +225,7 @@ public final class SwitcherooApp: @unchecked Sendable {
         state.usageStatesByAccountId = state.usageStatesByAccountId.filter { liveIds.contains($0.key) }
         usageInFlightByAccount = usageInFlightByAccount.filter { liveIds.contains($0.key) }
 
-        let now = Date()
+        let now = clock()
         var pending: [String]
 
         switch trigger {
@@ -234,6 +237,8 @@ public final class SwitcherooApp: @unchecked Sendable {
         case .accountSetChanged:
             // The live set changed: generation boundary even when no account
             // needs a fetch, so superseded in-flight results cannot land.
+            usageTask?.cancel()
+            usageTask = nil
             pending = pendingAccounts(accountIds: accountIds, now: now, bypassCache: false)
             usageGeneration += 1
         case .menuOpen:
@@ -272,6 +277,7 @@ public final class SwitcherooApp: @unchecked Sendable {
                 generation: generation,
                 providerId: providerId
             )
+            guard !Task.isCancelled else { return }
             await self.fetchUsageBatch(context: context)
         }
         lock.unlock()
@@ -312,6 +318,7 @@ public final class SwitcherooApp: @unchecked Sendable {
     private func prepareBatchContext(accountIds: [String], generation: Int, providerId: String?) async -> UsageBatchContext {
         var accounts: [UsageBatchAccount] = []
         for accountId in accountIds {
+            guard !Task.isCancelled else { break }
             let authData: Data?
             do {
                 authData = try engine.accountAuthData(providerId: providerId, accountId: accountId)
@@ -330,6 +337,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             var queueIndex = 0
 
             func startNext() {
+                guard !Task.isCancelled else { return }
                 guard queueIndex < context.accounts.count else { return }
                 let item = context.accounts[queueIndex]
                 queueIndex += 1
@@ -342,6 +350,10 @@ public final class SwitcherooApp: @unchecked Sendable {
                 startNext()
             }
             for await outcome in group {
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    return
+                }
                 self.publishUsage(accountId: outcome.accountId, generation: context.generation, outcome: outcome)
                 startNext()
             }
@@ -351,6 +363,9 @@ public final class SwitcherooApp: @unchecked Sendable {
     /// Fetches one account's usage. Failures are isolated per account and
     /// surface as that account's unavailable state only.
     private func fetchUsageForItem(_ item: UsageBatchAccount) async -> UsageFetchOutcome {
+        guard !Task.isCancelled else {
+            return UsageFetchOutcome(accountId: item.accountId, state: .unavailable(reason: nil), retryAfterSeconds: nil)
+        }
         guard let authData = item.authData else {
             return UsageFetchOutcome(
                 accountId: item.accountId,
@@ -359,6 +374,9 @@ public final class SwitcherooApp: @unchecked Sendable {
             )
         }
 
+        guard !Task.isCancelled else {
+            return UsageFetchOutcome(accountId: item.accountId, state: .unavailable(reason: nil), retryAfterSeconds: nil)
+        }
         recordUsageAttempt(accountId: item.accountId)
         do {
             let usage = try await usageFetcher?.fetchUsage(authData: authData, accountId: item.accountId)
@@ -383,7 +401,7 @@ public final class SwitcherooApp: @unchecked Sendable {
 
     private func recordUsageAttempt(accountId: String) {
         lock.lock()
-        usageLastAttemptByAccount[accountId] = Date()
+        usageLastAttemptByAccount[accountId] = clock()
         lock.unlock()
     }
 

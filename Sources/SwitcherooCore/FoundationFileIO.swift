@@ -48,7 +48,7 @@ public struct FoundationFileIO: SwitcherooFileIO {
         } else {
             try fileManager.moveItem(at: tempURL, to: url)
         }
-        fsyncDirectory(directory)
+        try fsyncDirectory(directory)
     }
 
     public func removeItem(path: String) throws {
@@ -158,11 +158,14 @@ public struct FoundationFileIO: SwitcherooFileIO {
         }
     }
 
-    private func fsyncDirectory(_ directory: URL) {
+    private func fsyncDirectory(_ directory: URL) throws {
         let fd = open(directory.path, O_RDONLY)
-        if fd >= 0 {
-            fsync(fd)
-            close(fd)
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Could not open directory \(directory.path) for syncing"])
+        }
+        defer { close(fd) }
+        guard fsync(fd) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Could not sync directory \(directory.path)"])
         }
     }
 
