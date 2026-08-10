@@ -5,7 +5,12 @@ public protocol SwitcherooConfigStoring {
     func save(_ config: SwitcherooConfig) throws
 }
 
-public protocol SwitcherooSecureStoring {
+/// Backs the account auth snapshots.
+///
+/// Implementations must be thread-safe: the app may call any method from any
+/// executor (for example, batch usage preparation reads one credential per
+/// account from concurrent app activity).
+public protocol SwitcherooSecureStoring: Sendable {
     func store(_ data: Data, key: String) throws
     func load(key: String) throws -> Data
     func delete(key: String) throws
@@ -30,4 +35,12 @@ public protocol AgentProvider {
 
     func prepareLogin(accountId: String, accountName: String, paths: SwitcherooPaths) throws -> PendingLogin
     func launchLoginInteractive(pending: PendingLogin) throws
+}
+
+/// Fetches live account usage for a single account from its saved credential.
+///
+/// Implementations must never persist, log, or embed credentials in URLs or
+/// error messages. Failures are reported via `SwitcherooUsageError`.
+public protocol AccountUsageFetching: Sendable {
+    func fetchUsage(authData: Data, accountId: String) async throws -> SwitcherooAccountUsage
 }

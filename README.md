@@ -17,7 +17,7 @@ Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the a
 > [!IMPORTANT]
 > For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
 
-Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs. It just snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
+Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI APIs, except for one read-only usage check per saved account: while the menu bar is open (and after account switches), it asks the Codex usage endpoint for each account's remaining five-hour and weekly allowance (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI.
 
 Not affiliated with OpenAI.
 
@@ -68,16 +68,17 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 | Add account | Launch the official `codex login` flow in Terminal for another account. |
 | Keychain storage | Store inactive auth snapshots as generic password items in macOS Keychain. |
 | Snapshot refresh | Best-effort sync keeps known account snapshots fresh when Codex updates the active auth file. |
+| Usage display | Show every account's remaining five-hour and weekly Codex allowance in the account dropdown, refreshed per row. |
 | Optional CLI | Use `list`, `current`, `import-current`, `add`, `switch`, `sync`, and `delete` from Terminal. |
 
 ## Boundaries
 
 | Switcheroo does | Switcheroo does not |
 | --- | --- |
-| Manage local auth snapshots for accounts you control. | Monitor live usage limits or quotas. |
+| Manage local auth snapshots for accounts you control. | Monitor live usage limits in real time or poll them in the background. |
 | Replace `~/.codex/auth.json` when you switch. | Refresh tokens itself. |
-| Use local parsing for display metadata such as expiry. | Call OpenAI APIs. |
-| Help avoid manual auth-file copying. | Share accounts, pool credentials, or bypass terms of service. |
+| Use local parsing for display metadata such as expiry. | Call OpenAI model or platform APIs. |
+| Fetch every account's remaining allowance from the read-only Codex usage endpoint, one credential per account. | Share accounts, pool credentials, or bypass terms of service. |
 | Keep account switching local to your Mac. | Work around service-wide Codex outages. |
 
 ## How It Works
@@ -85,6 +86,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 1. Each account’s Codex `auth.json` is stored as an opaque blob in macOS Keychain.
 2. “Switch” replaces the active `~/.codex/auth.json` atomically with the chosen snapshot.
 3. Best-effort sync keeps known account snapshots up to date when the current `auth.json` matches an existing account. The menu bar app polls only near token refresh time; the CLI syncs once per command.
+4. Usage display: while the menu bar is open, the app reads each saved account's snapshot from Keychain, derives a bearer credential from it, and calls the read-only Codex usage endpoint for that account's five-hour and weekly remaining allowance. Every row is fetched with its own credential; results are kept in memory only, keyed by account, updated live in the open dropdown, and never persisted.
 
 Docs:
 - [Usage](/docs/USAGE.md)

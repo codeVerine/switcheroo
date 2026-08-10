@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
             self.state = app.snapshot()
             self.timersEnabled = true
             self.statusMessageAutoDismissNanoseconds = 3_000_000_000
+            app.onUsageUpdated = Self.makeUsageUpdatedHandler(for: self)
             _ = app.syncActiveSnapshot()
             refresh()
             scheduleAutoSync()
@@ -47,6 +48,7 @@ final class AppModel: ObservableObject {
         self.timersEnabled = startTimers
         self.statusMessageAutoDismissNanoseconds = statusMessageAutoDismissNanoseconds
         self.state = app.snapshot()
+        app.onUsageUpdated = Self.makeUsageUpdatedHandler(for: self)
         if startTimers {
             scheduleAutoSync()
         }
@@ -56,9 +58,20 @@ final class AppModel: ObservableObject {
         statusMessageDismissTask?.cancel()
     }
 
+    /// Re-reads the app snapshot when async usage results land so the open
+    /// dropdown updates live instead of staying on "Checking usage…".
+    private static func makeUsageUpdatedHandler(for model: AppModel) -> @Sendable () -> Void {
+        { [weak model] in
+            Task { @MainActor in
+                guard let model, let app = model.app else { return }
+                model.state = app.snapshot()
+            }
+        }
+    }
+
     func refresh() {
         guard let app else { return }
-        app.refresh()
+        app.refresh(usageTrigger: .menuOpen)
         state = app.snapshot()
         if state.errorMessage != nil {
             clearStatusMessage()
@@ -99,7 +112,6 @@ final class AppModel: ObservableObject {
         app.deleteAccount(idOrName: accountId)
         state = app.snapshot()
     }
-
     func finalizePendingIfReady(setActive: Bool) {
         guard let app else { return }
         let result = app.finalizePendingIfReady(setActiveIfFirst: true)

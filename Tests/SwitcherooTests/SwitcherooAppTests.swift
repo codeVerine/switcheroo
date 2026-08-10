@@ -19,7 +19,7 @@ final class SwitcherooAppTests: XCTestCase {
         )
         let harness = try EngineHarness(config: config)
         let authData = try makeAuthData(email: "alpha@example.com", accountId: "acct-alpha", accessTokenExpiry: Date(timeIntervalSince1970: 1_700_000_200))
-        harness.secureStore.items["codex:\(account.id)"] = authData
+        try harness.secureStore.store(authData, key: "codex:\(account.id)")
 
         let app = harness.makeApp()
         app.refresh()
@@ -60,12 +60,12 @@ final class SwitcherooAppTests: XCTestCase {
         XCTAssertEqual(app.state.accounts.first?.name, "Renamed")
 
         app.syncActiveSnapshot()
-        XCTAssertEqual(harness.secureStore.items["codex:\(added.id)"], authData)
+        XCTAssertEqual(try? harness.secureStore.load(key: "codex:\(added.id)"), authData)
 
         app.deleteAccount(idOrName: added.id)
         XCTAssertTrue(app.state.accounts.isEmpty)
         XCTAssertNil(app.state.activeAccountId)
-        XCTAssertEqual(harness.secureStore.deletedKeys.last, "codex:\(added.id)")
+        XCTAssertEqual(harness.secureStore.recordedDeletedKeys.last, "codex:\(added.id)")
     }
 
     func testImportCurrentAccountWithDerivedNameSetsActiveOnlyForFirstAccount() throws {

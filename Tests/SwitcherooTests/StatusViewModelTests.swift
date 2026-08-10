@@ -86,7 +86,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(oneAccount.accountListMaxHeight, 66)
+        XCTAssertEqual(oneAccount.accountListMaxHeight, 74)
 
         let fourAccounts = StatusViewModel(
             state: SwitcherooAppState(accounts: [
@@ -98,7 +98,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(fourAccounts.accountListMaxHeight, 234)
+        XCTAssertEqual(fourAccounts.accountListMaxHeight, 266)
 
         let fiveAccounts = StatusViewModel(
             state: SwitcherooAppState(accounts: [
@@ -111,7 +111,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(fiveAccounts.accountListMaxHeight, 234)
+        XCTAssertEqual(fiveAccounts.accountListMaxHeight, 266)
         XCTAssertEqual(fiveAccounts.footerText, "5 accounts")
     }
 
@@ -187,6 +187,94 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.errorMessage, "Re-login required.")
         XCTAssertNil(viewModel.statusMessage)
         XCTAssertTrue(viewModel.canImportCurrentAccount)
+    }
+
+    func testUsageDisplayShownForEveryAccountRow() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let backup = makeAccount(id: "acc-2", name: "Backup")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 42, remainingPercent: 58, windowSeconds: 18_000, resetsAt: nil),
+            weekly: SwitcherooUsageWindow(usedPercent: 40, remainingPercent: 60, windowSeconds: 604_800, resetsAt: nil),
+            fetchedAt: now
+        )
+        let backupUsage = SwitcherooAccountUsage(
+            accountId: "acc-2",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 90, remainingPercent: 10, windowSeconds: 18_000, resetsAt: nil),
+            weekly: SwitcherooUsageWindow(usedPercent: 70, remainingPercent: 30, windowSeconds: 604_800, resetsAt: nil),
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active, backup],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage), backup.id: .loaded(backupUsage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now)
+
+        XCTAssertEqual(viewModel.accounts[0].usage?.text, "5h 58% · 1w 60%")
+        XCTAssertEqual(viewModel.accounts[0].usage?.kind, .loaded)
+        XCTAssertFalse(viewModel.accounts[0].usage?.hasLowRemaining ?? true)
+        XCTAssertEqual(viewModel.accounts[1].usage?.text, "5h 10% · 1w 30%")
+        XCTAssertTrue(viewModel.accounts[1].usage?.hasLowRemaining ?? false)
+    }
+
+    func testUsageDisplayLoadingAndUnavailableStates() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let loadingState = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loading]
+        )
+        let loading = StatusViewModel(state: loadingState, renameDraftAccountId: nil, now: now)
+        XCTAssertEqual(loading.accounts[0].usage?.text, "Checking usage…")
+        XCTAssertEqual(loading.accounts[0].usage?.kind, .loading)
+
+        let unavailableState = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .unavailable(reason: "Could not reach the usage service (offline?)")]
+        )
+        let unavailable = StatusViewModel(state: unavailableState, renameDraftAccountId: nil, now: now)
+        XCTAssertEqual(unavailable.accounts[0].usage?.text, "Usage unavailable")
+        XCTAssertEqual(unavailable.accounts[0].usage?.kind, .unavailable)
+        XCTAssertEqual(unavailable.accounts[0].usage?.detail, "Could not reach the usage service (offline?)")
+    }
+
+    func testUsageDisplayFlagsLowRemainingAndIncludesResetDetail() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 90, remainingPercent: 10, windowSeconds: 18_000, resetsAt: now.addingTimeInterval(7_200)),
+            weekly: SwitcherooUsageWindow(usedPercent: 84, remainingPercent: 16, windowSeconds: 604_800, resetsAt: now.addingTimeInterval(4 * 86_400)),
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now)
+
+        XCTAssertTrue(viewModel.accounts[0].usage?.hasLowRemaining ?? false)
+        XCTAssertEqual(
+            viewModel.accounts[0].usage?.detail,
+            "Five-hour: 10% remaining, resets in 2h · Weekly: 16% remaining, resets in 4d"
+        )
+    }
+
+    func testUsageDisplayNotRequestedHidesLine() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .notRequested]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now)
+
+        XCTAssertNil(viewModel.accounts[0].usage)
     }
 
     func testExpiryDisplayClassifiesRemainingTime() {

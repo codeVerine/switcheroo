@@ -209,6 +209,21 @@ public final class SwitcherooEngine: @unchecked Sendable {
         return result
     }
 
+    /// Loads the raw saved auth snapshot (opaque bytes) for an account.
+    ///
+    /// The caller is responsible for keeping the returned bytes in memory and
+    /// never persisting or logging them.
+    public func accountAuthData(providerId: String? = nil, accountId: String) throws -> Data {
+        let pid = try resolveProviderId(providerId)
+        let provider = try requireProvider(pid)
+        let providerState = providerConfig(providerId: provider.id)
+
+        guard providerState.accounts.contains(where: { $0.id == accountId }) else {
+            throw SwitcherooError.accountNotFound
+        }
+        return try secureStore.load(key: secureStoreKey(providerId: provider.id, accountId: accountId))
+    }
+
     public func switchToAccount(providerId: String? = nil, accountIdOrName: String) throws {
         let pid = try resolveProviderId(providerId)
         let provider = try requireProvider(pid)

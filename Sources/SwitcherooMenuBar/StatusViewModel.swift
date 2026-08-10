@@ -1,10 +1,11 @@
 import CoreGraphics
 import Foundation
+import SwitcherooCore
 import SwitcherooPresentation
 
 struct StatusViewModel: Equatable, Sendable {
     static let popoverWidth: CGFloat = 300
-    static let accountRowHeight: CGFloat = 50
+    static let accountRowHeight: CGFloat = 58
     static let accountRowSpacing: CGFloat = 6
     static let accountListVerticalPadding: CGFloat = 16
 
@@ -43,6 +44,10 @@ struct StatusViewModel: Equatable, Sendable {
                 expiry: state.accessTokenExpiryByAccountId[account.id].map {
                     ExpiryDisplay.make(expiry: $0, now: now)
                 },
+                usage: UsageDisplay.make(
+                    state: state.usageStatesByAccountId[account.id] ?? .notRequested,
+                    now: now
+                ),
                 showSwitchAction: state.activeAccountId != account.id
             )
         }
@@ -112,7 +117,91 @@ struct StatusViewModel: Equatable, Sendable {
         let isActive: Bool
         let isRenaming: Bool
         let expiry: ExpiryDisplay?
+        let usage: UsageDisplay?
         let showSwitchAction: Bool
+    }
+
+    /// Concise usage line shown under the active account row.
+    struct UsageDisplay: Equatable, Sendable {
+        enum Kind: Equatable, Sendable {
+            case loaded
+            case loading
+            case unavailable
+        }
+
+        let text: String
+        let kind: Kind
+        /// Tooltip detail: reset timing for loaded usage, or the (secret-free)
+        /// reason for unavailable usage.
+        let detail: String?
+        /// True when any window has less than 25% remaining.
+        let hasLowRemaining: Bool
+
+        private static let lowRemainingThreshold = 25.0
+
+        static func make(state: SwitcherooAccountUsageState, now: Date) -> UsageDisplay? {
+            switch state {
+            case .notRequested:
+                return nil
+            case .loading:
+                return UsageDisplay(text: "Checking usage…", kind: .loading, detail: nil, hasLowRemaining: false)
+            case .unavailable(let reason):
+                return UsageDisplay(
+                    text: "Usage unavailable",
+                    kind: .unavailable,
+                    detail: reason,
+                    hasLowRemaining: false
+                )
+            case .loaded(let usage):
+                let fiveHour = usage.fiveHour.map { Self.formatWindow(label: "5h", window: $0) }
+                let weekly = usage.weekly.map { Self.formatWindow(label: "1w", window: $0) }
+                let parts = [fiveHour, weekly].compactMap { $0 }
+                guard !parts.isEmpty else { return nil }
+                let lowRemaining = (usage.fiveHour?.remainingPercent ?? 100) < Self.lowRemainingThreshold
+                    || (usage.weekly?.remainingPercent ?? 100) < Self.lowRemainingThreshold
+                return UsageDisplay(
+                    text: parts.joined(separator: " · "),
+                    kind: .loaded,
+                    detail: Self.detailText(fiveHour: usage.fiveHour, weekly: usage.weekly, now: now),
+                    hasLowRemaining: lowRemaining
+                )
+            }
+        }
+
+        private static func formatWindow(label: String, window: SwitcherooUsageWindow) -> String {
+            "\(label) \(Self.percent(window.remainingPercent))"
+        }
+
+        private static func percent(_ value: Double) -> String {
+            "\(Int(value.rounded()))%"
+        }
+
+        private static func detailText(fiveHour: SwitcherooUsageWindow?, weekly: SwitcherooUsageWindow?, now: Date) -> String? {
+            let clauses = [
+                fiveHour.map { Self.clause(label: "Five-hour", window: $0, now: now) },
+                weekly.map { Self.clause(label: "Weekly", window: $0, now: now) },
+            ].compactMap { $0 }
+            return clauses.isEmpty ? nil : clauses.joined(separator: " · ")
+        }
+
+        private static func clause(label: String, window: SwitcherooUsageWindow, now: Date) -> String {
+            var text = "\(label): \(percent(window.remainingPercent)) remaining"
+            if let resetsAt = window.resetsAt {
+                text += ", resets \(Self.resetText(resetsAt: resetsAt, now: now))"
+            }
+            return text
+        }
+
+        private static func resetText(resetsAt: Date, now: Date) -> String {
+            let seconds = max(0, Int(resetsAt.timeIntervalSince(now)))
+            if seconds < 60 { return "now" }
+            let minutes = (seconds + 59) / 60
+            if minutes < 60 { return "in \(minutes)m" }
+            let hours = (minutes + 59) / 60
+            if hours < 24 { return "in \(hours)h" }
+            let days = (hours + 23) / 24
+            return "in \(days)d"
+        }
     }
 
     struct ExpiryDisplay: Equatable, Sendable {

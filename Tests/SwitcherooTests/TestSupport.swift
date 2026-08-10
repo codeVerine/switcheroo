@@ -20,28 +20,60 @@ final class InMemoryConfigStore: SwitcherooConfigStoring {
     }
 }
 
-final class InMemorySecureStore: SwitcherooSecureStoring {
-    var items: [String: Data] = [:]
-    private(set) var storedKeys: [String] = []
-    private(set) var loadedKeys: [String] = []
-    private(set) var deletedKeys: [String] = []
+final class InMemorySecureStore: SwitcherooSecureStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String: Data] = [:]
+    private var storedKeys: [String] = []
+    private var loadedKeys: [String] = []
+    private var deletedKeys: [String] = []
+
+    var allItems: [String: Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+
+    var recordedStoredKeys: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedKeys
+    }
+
+    var recordedLoadedKeys: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadedKeys
+    }
+
+    var recordedDeletedKeys: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return deletedKeys
+    }
 
     func store(_ data: Data, key: String) throws {
+        lock.lock()
         items[key] = data
         storedKeys.append(key)
+        lock.unlock()
     }
 
     func load(key: String) throws -> Data {
+        lock.lock()
         loadedKeys.append(key)
-        guard let data = items[key] else {
+        let data = items[key]
+        lock.unlock()
+        guard let data else {
             throw SwitcherooError.secureStoreItemMissing
         }
         return data
     }
 
     func delete(key: String) throws {
+        lock.lock()
         items.removeValue(forKey: key)
         deletedKeys.append(key)
+        lock.unlock()
     }
 }
 
@@ -123,8 +155,9 @@ final class StubProvider: AgentProvider {
 
 final class MockSwitcherooApp: SwitcherooAppControlling {
     var state: SwitcherooAppState
+    var onUsageUpdated: (@Sendable () -> Void)?
 
-    private(set) var refreshCalls = 0
+    private(set) var refreshTriggers: [UsageRefreshTrigger] = []
     private(set) var startAddAccountNameCalls: [String] = []
     private(set) var startAddAccountCalls = 0
     private(set) var importCurrentAccountNameCalls: [String] = []
@@ -156,8 +189,8 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
         self.state = state
     }
 
-    func refresh() {
-        refreshCalls += 1
+    func refresh(usageTrigger: UsageRefreshTrigger) {
+        refreshTriggers.append(usageTrigger)
         if let nextSnapshot {
             state = nextSnapshot
         }
@@ -306,6 +339,93 @@ final class MockSwitcherooApp: SwitcherooAppControlling {
     }
 }
 
+/// Test double for live account-usage fetching. Handlers are registered per
+/// account id; an optional per-account delay simulates slow responses.
+final class MockAccountUsageFetcher: AccountUsageFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage]
+    private var defaultHandler: (@Sendable () async throws -> SwitcherooAccountUsage)?
+    private var recordedAccountIds: [String] = []
+    private var recordedAuthData: [(accountId: String, authData: Data)] = []
+    private var activeCount = 0
+    private var maxConcurrent = 0
+
+    init(handlers: [String: @Sendable () async throws -> SwitcherooAccountUsage] = [:]) {
+        self.handlers = handlers
+    }
+
+    func setDefaultResult(_ usage: SwitcherooAccountUsage) {
+        lock.lock()
+        defaultHandler = { usage }
+        lock.unlock()
+    }
+
+    var callAccountIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedAccountIds
+    }
+
+    /// Safe per-call fingerprint of the credential bytes each account was
+    /// fetched with, so tests can prove credentials never cross accounts.
+    var recordedAuthDataByAccount: [String: Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        var byAccount: [String: Data] = [:]
+        for call in recordedAuthData {
+            byAccount[call.accountId] = call.authData
+        }
+        return byAccount
+    }
+
+    /// Highest number of fetches observed executing concurrently.
+    var maxConcurrentCalls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maxConcurrent
+    }
+
+    func setResult(accountId: String, usage: SwitcherooAccountUsage) {
+        setHandler(accountId: accountId) { usage }
+    }
+
+    func setError(accountId: String, error: Error) {
+        setHandler(accountId: accountId) { throw error }
+    }
+
+    func setHandler(accountId: String, _ handler: @escaping @Sendable () async throws -> SwitcherooAccountUsage) {
+        lock.lock()
+        handlers[accountId] = handler
+        lock.unlock()
+    }
+
+    func fetchUsage(authData: Data, accountId: String) async throws -> SwitcherooAccountUsage {
+        let handler = beginCall(accountId: accountId, authData: authData)
+        defer { endCall() }
+        if let handler {
+            return try await handler()
+        }
+        throw SwitcherooUsageError.serviceUnavailable(retryAfterSeconds: nil)
+    }
+
+    private func beginCall(accountId: String, authData: Data) -> (@Sendable () async throws -> SwitcherooAccountUsage)? {
+        lock.lock()
+        recordedAccountIds.append(accountId)
+        recordedAuthData.append((accountId: accountId, authData: authData))
+        activeCount += 1
+        maxConcurrent = max(maxConcurrent, activeCount)
+        let handler = handlers[accountId] ?? defaultHandler
+        lock.unlock()
+        return handler
+    }
+
+    private func endCall() {
+        lock.lock()
+        activeCount -= 1
+        lock.unlock()
+    }
+}
+
 struct EngineHarness {
     let configStore: InMemoryConfigStore
     let secureStore: InMemorySecureStore
@@ -384,6 +504,14 @@ func makeAuthData(
         tokens["account_id"] = accountId
     }
 
+    return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
+}
+
+func makeCodexAuthData(accessToken: String = "test-access-token", accountId: String? = "acct-1") throws -> Data {
+    var tokens: [String: Any] = ["access_token": accessToken]
+    if let accountId {
+        tokens["account_id"] = accountId
+    }
     return try JSONSerialization.data(withJSONObject: ["tokens": tokens])
 }
 

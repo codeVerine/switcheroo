@@ -11,7 +11,7 @@ This document explains what is stored, where it is stored, and what Switcheroo d
 
 Switcheroo does not attempt to parse, interpret, or modify the contents of `auth.json` beyond copying bytes. If Codex changes the file format, Switcheroo should continue working as long as the file remains a single JSON file that Codex consumes.
 
-Note: the menu-bar UI and account import paths may perform best-effort, local-only parsing of the stored `auth.json` snapshot to show non-sensitive metadata (for example, access token expiry), derive a reasonable default account name, and detect whether an imported account already exists. Switcheroo still stores and swaps the full file as opaque bytes.
+Note: the menu-bar UI and account import paths may perform best-effort, local-only parsing of the stored `auth.json` snapshot to show non-sensitive metadata (for example, access token expiry), derive a reasonable default account name, and detect whether an imported account already exists. The usage display additionally reads the access token (and ChatGPT account id) from the snapshot in memory to authenticate one read-only usage request; see “Usage Display Network Calls” below. Switcheroo still stores and swaps the full file as opaque bytes.
 
 ## What Is In `auth.json` (Typical)
 
@@ -68,7 +68,7 @@ Non-goals:
 
 ## Token Refresh
 
-Switcheroo does not call any Codex/OpenAI APIs and does not implement token refresh logic.
+Switcheroo does not implement token refresh logic and never calls model or platform APIs.
 
 What it does instead:
 
@@ -80,3 +80,14 @@ What it does instead:
 Practical takeaway:
 
 - If you want an account’s stored snapshot to stay fresh, make that account active occasionally and run a normal Codex command/app workflow, then let Switcheroo capture the updated file. If the current auth file is for an account that has not been added, use the explicit import action.
+
+## Usage Display Network Calls
+
+The menu bar app makes one read-only network call per saved account, per explicit usage batch, to show remaining allowance:
+
+- **Endpoint class**: the Codex usage endpoint, the same one the Codex CLI uses for its rate-limit/usage display. For ChatGPT logins this is `GET https://chatgpt.com/backend-api/wham/usage`; Codex API style hosts use `GET {base}/api/codex/usage`. FedRAMP accounts additionally send `X-OpenAI-Fedramp: true`, derived from the saved id-token claim. This is not a model, platform, or billing API.
+- **When calls occur**: at app launch, each time the menu is opened (if the last result is over a minute old), and after every account switch, as one all-account batch - one request per account, each authenticated with that account's own saved credential. Failed rows respect a retry cooldown (including the server's `Retry-After` hint for 429 responses), a request is skipped while one is already in flight for the same account, and network concurrency is capped at three in-flight requests. The background auth-sync timer never triggers usage requests; never a polling service.
+- **What credential is used**: each account's saved `auth.json` snapshot is read from Keychain into memory, and only that account's access token (plus its ChatGPT account id, if present) is sent as request headers (`Authorization: Bearer …`, `ChatGPT-Account-ID`). Tokens are never placed in URLs, query strings, logs, or error messages.
+- **What is never persisted or logged**: usage results, fetched credentials, and request/response bodies are kept in memory only, keyed by account id, and cleared on app exit. The HTTP session is ephemeral with URL caching, cookie storage, and URL credential storage disabled, so no request or response data touches a persistent on-disk store. No usage telemetry or history is written to disk.
+- **Failure behavior**: authentication, offline, rate-limiting, and malformed-response failures surface as a recoverable `Usage unavailable` state on that account's row with secret-free hints. They never modify, delete, or refresh saved credentials, never block account switching, and never affect other accounts' rows.
+- **Token refresh is out of scope**: if a saved access token is rejected, that row shows an unavailable hint; Switcheroo does not attempt to refresh it. Token refresh is planned as a separate future task on the authenticated Codex API base layer.

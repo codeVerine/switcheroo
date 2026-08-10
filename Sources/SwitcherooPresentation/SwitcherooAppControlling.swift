@@ -2,7 +2,12 @@ import Foundation
 import SwitcherooCore
 
 public protocol SwitcherooAppControlling: AnyObject {
-    func refresh()
+    /// Fired when asynchronous usage state changes so live views (the menu bar
+    /// dropdown) can re-read `snapshot()` without waiting for a synchronous
+    /// refresh. May be called from any executor.
+    var onUsageUpdated: (@Sendable () -> Void)? { get set }
+
+    func refresh(usageTrigger: UsageRefreshTrigger)
     func snapshot() -> SwitcherooAppState
 
     func startAddAccount(name: String)
@@ -22,3 +27,11 @@ public protocol SwitcherooAppControlling: AnyObject {
 }
 
 extension SwitcherooApp: SwitcherooAppControlling {}
+
+extension SwitcherooAppControlling {
+    /// Convenience for callers that do not distinguish usage triggers
+    /// (menu-open semantics; the CLI wires no usage fetcher anyway).
+    public func refresh() {
+        refresh(usageTrigger: .menuOpen)
+    }
+}
