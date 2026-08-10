@@ -110,6 +110,7 @@ public final class SwitcherooApp: @unchecked Sendable {
     private var usageInFlightByAccount: [String: Int] = [:]
     private var usageLastAttemptByAccount: [String: Date] = [:]
     private var usageRetryAfterByAccount: [String: Int] = [:]
+    private var usageFailureCountByAccount: [String: Int] = [:]
 
     public init(
         engine: SwitcherooEngine,
@@ -252,6 +253,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             usageInFlightByAccount = [:]
             usageLastAttemptByAccount = [:]
             usageRetryAfterByAccount = [:]
+            usageFailureCountByAccount = [:]
             state.usageStatesByAccountId = [:]
             usageProviderId = nil
             lock.unlock()
@@ -268,6 +270,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             usageInFlightByAccount = [:]
             usageLastAttemptByAccount = [:]
             usageRetryAfterByAccount = [:]
+            usageFailureCountByAccount = [:]
             state.usageStatesByAccountId = [:]
             usageProviderId = providerId
         }
@@ -279,6 +282,7 @@ public final class SwitcherooApp: @unchecked Sendable {
         usageInFlightByAccount = usageInFlightByAccount.filter { liveIds.contains($0.key) }
         usageLastAttemptByAccount = usageLastAttemptByAccount.filter { liveIds.contains($0.key) }
         usageRetryAfterByAccount = usageRetryAfterByAccount.filter { liveIds.contains($0.key) }
+        usageFailureCountByAccount = usageFailureCountByAccount.filter { liveIds.contains($0.key) }
 
         let currentTime = clock()
         var pending: [String]
@@ -369,7 +373,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             switch state.usageStatesByAccountId[accountId] {
             case .loaded(let usage) where !bypassCache && now.timeIntervalSince(usage.fetchedAt) < tierInterval:
                 continue
-            case .unavailable where !bypassCache && isWithinFailureCooldown(accountId: accountId, now: now):
+            case .unavailable where !bypassCache && isWithinFailureCooldown(accountId: accountId, now: now, isActive: accountId == activeAccountId):
                 continue
             default:
                 break
@@ -382,10 +386,28 @@ public final class SwitcherooApp: @unchecked Sendable {
         return pending
     }
 
-    private func isWithinFailureCooldown(accountId: String, now: Date) -> Bool {
+    /// Returns true when the account is still inside its failure cooldown
+    /// window. Active accounts use a flat 30-second cooldown for fast
+    /// recovery; inactive accounts use per-account exponential backoff
+    /// (1, 2, 4, 8, 16 min, capped at 30 min) reset after each success.
+    /// A server Retry-After header is always honoured when longer.
+    private func isWithinFailureCooldown(accountId: String, now: Date, isActive: Bool) -> Bool {
         guard let lastAttempt = usageLastAttemptByAccount[accountId] else { return false }
         let retryAfter = usageRetryAfterByAccount[accountId] ?? 0
-        let cooldown = max(usageFailureCooldown, TimeInterval(retryAfter))
+        let baseCooldown: TimeInterval
+        if isActive {
+            baseCooldown = usageFailureCooldown
+        } else {
+            let failureCount = usageFailureCountByAccount[accountId] ?? 0
+            if failureCount > 0 {
+                let backoffMinutes: [TimeInterval] = [60, 120, 240, 480, 960, 1800]
+                let index = min(failureCount - 1, backoffMinutes.count - 1)
+                baseCooldown = backoffMinutes[index]
+            } else {
+                baseCooldown = usageFailureCooldown
+            }
+        }
+        let cooldown = max(baseCooldown, TimeInterval(retryAfter))
         return now.timeIntervalSince(lastAttempt) < cooldown
     }
 
@@ -507,6 +529,11 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
         self.state.usageStatesByAccountId[accountId] = outcome.state
         usageInFlightByAccount[accountId] = nil
+        if case .loaded = outcome.state {
+            usageFailureCountByAccount[accountId] = nil
+        } else {
+            usageFailureCountByAccount[accountId] = (usageFailureCountByAccount[accountId] ?? 0) + 1
+        }
         if let retryAfterSeconds = outcome.retryAfterSeconds {
             usageRetryAfterByAccount[accountId] = retryAfterSeconds
         } else {

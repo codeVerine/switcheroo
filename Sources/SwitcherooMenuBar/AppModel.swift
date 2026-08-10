@@ -86,12 +86,7 @@ final class AppModel: ObservableObject {
     /// the menu never initiates usage fetching; the cached per-account usage
     /// state is shown as-is.
     func refresh() {
-        guard let app else { return }
-        app.refresh(usageTrigger: .menuOpen)
-        state = app.snapshot()
-        if state.errorMessage != nil {
-            clearStatusMessage()
-        }
+        refresh(usageTrigger: .menuOpen)
     }
 
     /// Launches a refresh with an explicit usage trigger (launch seeding,
