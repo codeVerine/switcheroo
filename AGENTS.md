@@ -4,15 +4,13 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
-
 - No linter is configured. CI (`.github/workflows/ci.yml`) runs `swift test`, a release build of the `switcheroo` product, and `./scripts/bundle_app.sh`.
 - Run `swift test` locally; the full suite is fast (about 1 second).
 
 ## Pi auth-target sync sharp edges
 
-- Switching accounts in Switcheroo also rewrites Pi's `openai-codex` credential in `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json`). See `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift` for the verified schema and conversion rules. The write is a Pi-compatible locked provider-scoped update (`<path>.lock` directory with mtime staleness, matching Pi's `proper-lockfile`).
-- Pi credential semantics by version: Pi 0.83.x read auth.json once at process start (restart required after switching). Pi 0.84+ (`readLatestData` in `dist/core/auth-storage.js`) detects external file revisions and reloads under the lock before the next credential read; a restart is only needed for an already-open session/transport. Pi's `chatgpt_account_id` is derived from the access token, so the adapter requires that claim and rejects conflicting id-token/`tokens.account_id` values.
-- The authoritative Pi source lives outside this repo: `@earendil-works/pi-coding-agent` (installed e.g. at `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`); its `dist/core/auth-storage.js` and `dist/auth/oauth/openai-codex.js` (under `pi-ai`) define auth.json layout, lock, and credential semantics.
+- Switching accounts also updates Pi's `openai-codex` credential. See `docs/DATA-AND-SECURITY.md` for the sync and storage contract, `docs/TROUBLESHOOTING.md` for reload guidance, and `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift` for the implementation.
+- Pi's auth schema and lock protocol are external compatibility contracts. The adapter comments and tests record the currently verified behavior; re-check Pi's installed implementation before changing either.
 
 ## Transaction journal sharp edges
 

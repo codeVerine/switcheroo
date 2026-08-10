@@ -12,15 +12,14 @@
 
 Native macOS menu bar app for managing and switching between your own Codex accounts.
 
-Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the active `~/.codex/auth.json` from a small menu bar UI. When you switch, it also synchronizes the same account into Pi's `openai-codex` login (`~/.pi/agent/auth.json`), so no second `/logout` and `/login` flow is needed. It also ships an optional CLI for scripting and development, but the packaged app is the primary experience.
+Switcheroo stores each account's Codex auth snapshot in Keychain and swaps the active `~/.codex/auth.json` from a small menu bar UI. When you switch, it also synchronizes the same account into Pi's `openai-codex` login, so no second `/logout` and `/login` flow is needed. It also ships an optional CLI for scripting and development, but the packaged app is the primary experience.
 
 > [!IMPORTANT]
 > For Codex CLI and Codex App users, switch accounts, then restart the client for the new account to take effect.
 
-> [!IMPORTANT]
-> Pi 0.83.x reads its auth file once when the process starts, so restart Pi after switching. Pi 0.84+ detects external auth-file changes automatically on the next credential read; a restart is only needed for a session that is already open.
+For Pi reload behavior after a switch, see [Troubleshooting](/docs/TROUBLESHOOTING.md).
 
-Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call OpenAI or Pi APIs, except for one read-only usage check per saved account: while the menu bar is open (and after account switches), it asks the Codex usage endpoint for each account's remaining five-hour and weekly allowance (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI, and mirrors that account into Pi's auth file.
+Switcheroo is intentionally simple: it does not manage profiles, browser sessions, quotas, usage limits, or plan selection. It does not call model, platform, or Pi APIs. During usage refreshes (including menu opens and account switches), it makes one read-only usage request per saved account to the Codex usage endpoint (see [Data & Security](/docs/DATA-AND-SECURITY.md)). It snapshots and swaps the active local `auth.json` used by the Codex app/CLI, and mirrors that account into Pi's auth file.
 
 Not affiliated with OpenAI.
 
@@ -67,7 +66,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 | Feature | What it does |
 | --- | --- |
 | Menu bar switching | Switch the active Codex account from a native macOS menu bar app. |
-| Pi account sync | A switch also selects the same account for Pi (`~/.pi/agent/auth.json`, `openai-codex` entry). |
+| Pi account sync | A switch also selects the same account for Pi's `openai-codex` entry (default auth file: `~/.pi/agent/auth.json`). |
 | Import existing login | Snapshot the account already logged in at `~/.codex/auth.json`. |
 | Add account | Launch the official `codex login` flow in Terminal for another account. |
 | Keychain storage | Store inactive auth snapshots as generic password items in macOS Keychain. |
@@ -81,7 +80,7 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 | --- | --- |
 | Manage local auth snapshots for accounts you control. | Monitor live usage limits in real time or poll them in the background. |
 | Replace `~/.codex/auth.json` when you switch. | Refresh tokens itself. |
-| Use local parsing for display metadata such as expiry. | Call OpenAI model or platform APIs. |
+| Use local parsing for display metadata and auth-target conversion. | Call OpenAI model or platform APIs. |
 | Fetch every account's remaining allowance from the read-only Codex usage endpoint, one credential per account. | Share accounts, pool credentials, or bypass terms of service. |
 | Mirror the selected account into Pi's auth file on switch. | Work around service-wide Codex outages. |
 | Keep account switching local to your Mac. | Run any background sync service. |
@@ -89,11 +88,11 @@ The optional CLI artifact is also available as `switcheroo-<version>-macos-arm64
 ## How It Works
 
 1. Each account’s Codex `auth.json` is stored as an opaque blob in macOS Keychain.
-2. “Switch” runs one serialized transaction: it replaces the active `~/.codex/auth.json` atomically with the chosen snapshot and synchronizes the same account into Pi’s `~/.pi/agent/auth.json` (`openai-codex` entry), preserving Pi’s other providers. A durable journal (user-only permissions) makes the switch crash-safe: an interrupted transaction is rolled back or completed at the next launch.
+2. “Switch” runs one serialized transaction: it replaces the active `~/.codex/auth.json` atomically with the chosen snapshot and synchronizes the same account into Pi’s `openai-codex` entry, preserving Pi’s other providers. A durable journal (user-only permissions) makes crash recovery explicit: an interrupted transaction is rolled back or completed at the next launch, or remains as a recovery record if concurrent changes prevent completion.
 3. Best-effort sync keeps known account snapshots up to date when the current `auth.json` matches an existing account. The menu bar app polls only near token refresh time; the CLI syncs once per command.
-4. Usage display: while the menu bar is open, the app reads each saved account's snapshot from Keychain, derives a bearer credential from it, and calls the read-only Codex usage endpoint for that account's five-hour and weekly remaining allowance. Every row is fetched with its own credential; results are kept in memory only, keyed by account, updated live in the open dropdown, and never persisted.
+4. Usage display: the menu bar app reads each saved account's snapshot from Keychain, derives a bearer credential from it, and calls the read-only Codex usage endpoint for that account's five-hour and weekly remaining allowance on its usage refreshes. Every row is fetched with its own credential; results are kept in memory only, keyed by account, updated live in the open dropdown, and never persisted.
 
-If Pi’s auth file is malformed or cannot be converted, the switch fails as a whole and reports an error - Switcheroo never leaves the two files out of sync, even across a crash. Token contents never appear in logs or errors.
+If Pi’s auth file is malformed or cannot be converted, the switch fails as a whole and reports an error. Crash recovery is journaled; see [Data & Security](/docs/DATA-AND-SECURITY.md) for the recovery contract. Token contents never appear in logs or errors.
 
 Docs:
 - [Usage](/docs/USAGE.md)

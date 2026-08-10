@@ -9,13 +9,13 @@ This document explains what is stored, where it is stored, and what Switcheroo d
 1. A config file describing your Switcheroo accounts.
 2. For each account, an opaque snapshot of Codex `auth.json` stored in Keychain.
 
-Switcheroo does not attempt to parse, interpret, or modify the contents of `auth.json` beyond copying bytes. If Codex changes the file format, Switcheroo should continue working as long as the file remains a single JSON file that Codex consumes.
+Switcheroo stores and swaps the Codex snapshot as opaque bytes. It does parse selected fields in memory for display metadata, usage requests, and auth-target conversion, but does not rewrite the stored Codex snapshot. If Codex changes the file format, opaque storage and swapping should continue working as long as the file remains a single JSON file that Codex consumes.
 
 Note: the menu-bar UI and account import paths may perform best-effort, local-only parsing of the stored `auth.json` snapshot to show non-sensitive metadata (for example, access token expiry), derive a reasonable default account name, and detect whether an imported account already exists. The usage display additionally reads the access token (and ChatGPT account id) from the snapshot in memory to authenticate one read-only usage request; see “Usage Display Network Calls” below. Switcheroo still stores and swaps the full file as opaque bytes.
 
 ## What Is In `auth.json` (Typical)
 
-Switcheroo treats `auth.json` as opaque. For reference only: as of May 1, 2026, the `~/.codex/auth.json` observed on the author’s machine had top-level keys:
+For storage and the Codex auth target, Switcheroo treats `auth.json` as opaque. For reference only: as of May 1, 2026, the `~/.codex/auth.json` observed on the author’s machine had top-level keys:
 
 - `OPENAI_API_KEY`
 - `auth_mode`
@@ -70,7 +70,7 @@ When you switch accounts, Switcheroo converts the selected account’s Codex sna
 What this means for Pi:
 
 - No second `/logout` and `/login` flow is needed: after a switch, Pi authenticates as the same account Codex is using.
-- Pi 0.83.x read `auth.json` once at process start, so a switch required restarting Pi. Pi 0.84+ compares the file revision on every credential read and reloads under the lock when another process changed it; a restart is only needed for a session whose transport is already open.
+- For Pi version-specific reload behavior after a switch, see [Troubleshooting](./TROUBLESHOOTING.md).
 
 Failure behavior:
 
@@ -78,7 +78,7 @@ Failure behavior:
 - A switch interrupted by a crash is rolled back or completed at the next launch from the journal. If a rollback cannot complete (for example, another process modified a file mid-switch), the error names the affected files and the journal remains as a recovery record; fix or remove the affected file, then switch again.
 - Switcheroo never exposes token contents in logs, errors, or status messages.
 
-Switcheroo does not call any Pi or OpenAI APIs and never refreshes Pi credentials itself. When Pi refreshes the synced credential during normal use, that is Pi writing to its own file; Switcheroo simply preserves whatever Pi wrote, exactly like it preserves any unrelated provider entry.
+Switcheroo does not call Pi APIs, refresh credentials itself, or call model or platform APIs. It does call the read-only Codex usage endpoint described below. When Pi refreshes the synced credential during normal use, that is Pi writing to its own file; Switcheroo simply preserves whatever Pi wrote, exactly like it preserves any unrelated provider entry.
 
 ## Threat Model (Plain English)
 

@@ -67,7 +67,7 @@ Orchestration and failure semantics:
 3. On a failure, every published mutation (destinations, Keychain, config) is rolled back in reverse order; rollbacks are compare-and-swap guarded, and every failed recovery step is reported in a `rollbackIncomplete` error.
 4. If a rollback cannot complete - or the process is killed mid-transaction - the journal survives and the next launch reconciles it: an uncommitted transaction is rolled back, a committed one is completed. An unreadable journal blocks startup with the journal path in the error.
 
-The switch therefore behaves all-or-nothing, including across crashes: either every destination file holds the new account, or none of them do (and the error says so).
+The switch is designed to behave all-or-nothing, including across crashes. If a concurrent modification prevents rollback from completing, Switcheroo reports the affected paths and leaves the journal for recovery instead of guessing.
 
 Adding another built-in auth target:
 
@@ -76,11 +76,6 @@ Adding another built-in auth target:
 3. Add tests: a contract test using the fake adapter plus a conversion test for the new target.
 
 No background service, plugin loader, or dynamic discovery is involved: adapters are built-in and registered at composition time.
-
-2. Atomically overwrite the active Codex auth file (default `~/.codex/auth.json`).
-3. Mark that account as active in config.
-4. Refresh the menu state with an account-switch usage trigger: one fresh all-account generation replaces any cached rows so the dropdown never shows another account's numbers.
-
 
 ### Usage Display
 
