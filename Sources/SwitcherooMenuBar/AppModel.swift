@@ -101,7 +101,11 @@ final class AppModel: ObservableObject {
     func switchToAccount(_ accountId: String) {
         guard let app else { return }
         clearStatusMessage()
-        app.switchToAccount(idOrName: accountId)
+        do {
+            try app.switchToAccount(idOrName: accountId)
+        } catch {
+            // The app layer publishes the error into state.
+        }
         state = app.snapshot()
         scheduleAutoSync()
     }

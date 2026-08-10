@@ -18,10 +18,26 @@ public struct CodexAuthTargetAdapter: AuthTargetAdapter {
         providerState.activeAuthFilePathOverride ?? defaultAuthFilePath
     }
 
-    public func destinationDocument(fromSourceAuthData sourceAuthData: Data, existingDestinationData: Data?) throws -> Data {
+    public func convertedCredential(fromSourceAuthData sourceAuthData: Data) throws -> AuthTargetCredential? {
         guard !sourceAuthData.isEmpty else {
             throw AuthTargetSyncError.unsupportedSource(targetId: id, reason: "source auth snapshot is empty")
         }
+        return nil
+    }
+
+    public func validateExistingDestination(existingDestinationData: Data?) throws {
+        // Whole-file target: any existing bytes are replaced wholesale.
+    }
+
+    public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data {
+        // Skip the write when the destination already holds exactly the source
+        // bytes (e.g. importing the account that is already active).
+        if fileIO.fileExists(path: destinationPath),
+           let existing = try? fileIO.readFile(path: destinationPath),
+           existing == sourceAuthData {
+            return sourceAuthData
+        }
+        try fileIO.writeFileAtomically(sourceAuthData, path: destinationPath, permissions: 0o600)
         return sourceAuthData
     }
 }

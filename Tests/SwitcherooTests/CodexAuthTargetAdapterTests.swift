@@ -5,31 +5,52 @@ import SwitcherooCore
 /// Codex is the primary auth target: whole-file replacement of the active
 /// auth.json with the selected opaque snapshot.
 final class CodexAuthTargetAdapterTests: XCTestCase {
-    func testDestinationDocumentReplacesEntireFileWithSourceSnapshot() throws {
+    func testWriteDestinationReplacesEntireFileWithSourceSnapshot() throws {
         let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
         let snapshot = try makeCodexAuthData(refreshToken: "refresh-codex")
+        let fileIO = InMemoryFileIO()
+        let path = "/tmp/codex-auth.json"
+        fileIO.files[path] = Data("unrelated prior content".utf8)
 
-        let document = try adapter.destinationDocument(
-            fromSourceAuthData: snapshot,
-            existingDestinationData: Data("unrelated prior content".utf8)
+        let written = try adapter.writeDestination(
+            credential: nil,
+            sourceAuthData: snapshot,
+            destinationPath: path,
+            fileIO: fileIO
         )
 
-        XCTAssertEqual(document, snapshot)
+        XCTAssertEqual(written, snapshot)
+        XCTAssertEqual(fileIO.files[path], snapshot)
     }
 
-    func testDestinationDocumentIsOpaquePassthroughForAnyNonNullSource() throws {
+    func testWriteDestinationIsOpaquePassthroughForAnyNonNullSource() throws {
         let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
         let opaque = Data("{\"anything\": [1, 2, 3]}".utf8)
+        let fileIO = InMemoryFileIO()
 
-        let document = try adapter.destinationDocument(fromSourceAuthData: opaque, existingDestinationData: nil)
+        let written = try adapter.writeDestination(credential: nil, sourceAuthData: opaque, destinationPath: "/tmp/opaque.json", fileIO: fileIO)
 
-        XCTAssertEqual(document, opaque)
+        XCTAssertEqual(written, opaque)
+        XCTAssertEqual(fileIO.files["/tmp/opaque.json"], opaque)
     }
 
-    func testDestinationDocumentRejectsEmptySource() {
+    func testWriteDestinationSkipsRewriteWhenDestinationAlreadyHoldsSource() throws {
+        let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
+        let snapshot = try makeCodexAuthData(refreshToken: "refresh-codex")
+        let fileIO = InMemoryFileIO()
+        let path = "/tmp/codex-auth.json"
+        fileIO.files[path] = snapshot
+
+        let written = try adapter.writeDestination(credential: nil, sourceAuthData: snapshot, destinationPath: path, fileIO: fileIO)
+
+        XCTAssertEqual(written, snapshot)
+        XCTAssertTrue(fileIO.writes.isEmpty)
+    }
+
+    func testConversionRejectsEmptySource() {
         let adapter = CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")
 
-        XCTAssertThrowsError(try adapter.destinationDocument(fromSourceAuthData: Data(), existingDestinationData: nil)) { error in
+        XCTAssertThrowsError(try adapter.convertedCredential(fromSourceAuthData: Data())) { error in
             guard case AuthTargetSyncError.unsupportedSource(let targetId, _) = error else {
                 return XCTFail("Expected unsupportedSource, got \(error)")
             }

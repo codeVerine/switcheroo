@@ -51,11 +51,11 @@ final class SwitcherooAppTests: XCTestCase {
         XCTAssertEqual(added.name, "Work")
         XCTAssertEqual(app.state.activeAccountId, added.id)
         XCTAssertNil(app.state.pendingLogin)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
 
-        app.switchToAccount(idOrName: added.id.prefix(6).description)
+        try app.switchToAccount(idOrName: added.id.prefix(6).description)
         XCTAssertEqual(app.state.activeAccountId, added.id)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
 
         app.renameAccount(accountId: added.id, newName: "Renamed")
         XCTAssertEqual(app.state.accounts.first?.name, "Renamed")
@@ -153,8 +153,8 @@ final class SwitcherooAppTests: XCTestCase {
         XCTAssertEqual(result.disposition, .created)
         let added = try XCTUnwrap(result.account)
         XCTAssertEqual(app.state.activeAccountId, added.id)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
-        XCTAssertEqual(harness.fileIO.writes.last?.data, authData)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.data, authData)
     }
 
     func testSelectProviderUpdatesSelectionAndStillRefreshesState() throws {
@@ -198,11 +198,13 @@ final class SwitcherooAppTests: XCTestCase {
         )
         let harness = try EngineHarness(config: config, authTargetAdapters: [PiAuthTargetAdapter()])
         let firstAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
             refreshToken: "refresh-first",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
             tokensAccountId: "acct-first"
         )
         let secondAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_200, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
             refreshToken: "refresh-second",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
             tokensAccountId: "acct-second"
@@ -212,7 +214,7 @@ final class SwitcherooAppTests: XCTestCase {
         harness.fileIO.files[activePath] = firstAuth
         let app = harness.makeApp()
 
-        app.switchToAccount(idOrName: "acc-second")
+        try app.switchToAccount(idOrName: "acc-second")
 
         XCTAssertNil(app.state.errorMessage)
         XCTAssertEqual(app.state.activeAccountId, second.id)
@@ -239,11 +241,13 @@ final class SwitcherooAppTests: XCTestCase {
         )
         let harness = try EngineHarness(config: config, authTargetAdapters: [PiAuthTargetAdapter()])
         let firstAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
             refreshToken: "refresh-first",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
             tokensAccountId: "acct-first"
         )
         let secondAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_200, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
             refreshToken: "refresh-second",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
             tokensAccountId: "acct-second"
@@ -254,7 +258,7 @@ final class SwitcherooAppTests: XCTestCase {
         harness.fileIO.files[piPath] = Data("broken json".utf8)
         let app = harness.makeApp()
 
-        app.switchToAccount(idOrName: "acc-second")
+        XCTAssertThrowsError(try app.switchToAccount(idOrName: "acc-second"))
 
         let message = try XCTUnwrap(app.state.errorMessage)
         XCTAssertTrue(message.contains("Could not sync pi"))

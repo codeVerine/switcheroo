@@ -8,6 +8,7 @@ public enum AuthTargetSyncError: LocalizedError, Sendable {
     case malformedDestination(targetId: String, path: String)
     case destinationReadFailed(targetId: String, path: String, reason: String)
     case destinationWriteFailed(targetId: String, path: String, reason: String)
+    case destinationCollision(path: String, targets: String)
     case rollbackIncomplete(message: String)
 
     public var errorDescription: String? {
@@ -20,6 +21,8 @@ public enum AuthTargetSyncError: LocalizedError, Sendable {
             return "Could not sync \(targetId): could not read \(path) (\(reason))."
         case .destinationWriteFailed(let targetId, let path, let reason):
             return "Could not sync \(targetId): could not write \(path) (\(reason))."
+        case .destinationCollision(let path, let targets):
+            return "Auth target destinations collide: \(path) is used by both \(targets). Fix the destination configuration, then switch again."
         case .rollbackIncomplete(let message):
             return message
         }
@@ -31,6 +34,7 @@ public enum SwitcherooError: LocalizedError, Sendable {
     case providerNotFound(providerId: String)
     case accountNotFound
     case noActiveAccount
+    case noAuthTargetsConfigured
 
     case missingAuthFile(path: String)
     case invalidAuthFile(path: String)
@@ -50,6 +54,8 @@ public enum SwitcherooError: LocalizedError, Sendable {
             return "Account not found."
         case .noActiveAccount:
             return "No active account."
+        case .noAuthTargetsConfigured:
+            return "No auth targets configured; account switching would silently disable Codex auth file swapping. Register at least one auth target adapter."
         case .missingAuthFile(let path):
             return "Missing auth file at \(path)."
         case .invalidAuthFile(let path):

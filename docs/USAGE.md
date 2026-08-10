@@ -38,7 +38,7 @@ Menu bar only; the CLI does not fetch or show usage. Every account row in the dr
 - **Caching and retries**: results are kept in memory for up to one minute; a request is skipped while one is already in flight for the same account, so opening the menu repeatedly does not spam the endpoint. Failed rows wait out a short cooldown (honoring the server's `Retry-After` hint when provided) before being retried, and at most three requests run at once. No usage requests ever originate from the background auth-sync timer.
 
 > [!IMPORTANT]
-> Pi reads its auth file once when the process starts. After switching accounts, restart any running Pi session; a running session keeps its old account and may overwrite the synced credential when it refreshes its own token.
+> Pi 0.83.x reads its auth file once when the process starts, so restart Pi after switching. Pi 0.84+ detects external auth-file changes automatically on the next credential read; a restart is only needed for a session that is already open.
 
 Background behavior:
 

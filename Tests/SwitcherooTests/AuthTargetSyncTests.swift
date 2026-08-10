@@ -39,8 +39,8 @@ final class AuthTargetSyncTests: XCTestCase {
         let other = try XCTUnwrap(piDoc["opencode-go"] as? [String: Any])
         XCTAssertEqual(other["key"] as? String, "placeholder-key")
 
-        XCTAssertEqual(harness.fileIO.writes.last?.path, piAuthPath)
-        XCTAssertEqual(harness.fileIO.writes.last?.permissions, 0o600)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, piAuthPath)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.permissions, 0o600)
 
         // Config marks the second account active.
         let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
@@ -57,8 +57,8 @@ final class AuthTargetSyncTests: XCTestCase {
 
         let piDoc = try XCTUnwrap(JSONSerialization.jsonObject(with: harness.fileIO.files[piAuthPath]!) as? [String: Any])
         XCTAssertEqual(Set(piDoc.keys), ["openai-codex"])
-        XCTAssertEqual(harness.fileIO.writes.last?.path, piAuthPath)
-        XCTAssertEqual(harness.fileIO.writes.last?.permissions, 0o600)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, piAuthPath)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.permissions, 0o600)
     }
 
     func testSwitchRunsEveryConfiguredTargetAdapter() throws {
@@ -80,6 +80,28 @@ final class AuthTargetSyncTests: XCTestCase {
         let stubDoc = try XCTUnwrap(JSONSerialization.jsonObject(with: harness.fileIO.files["~/.stub-harness/auth.json"]!) as? [String: Any])
         XCTAssertEqual(Set(stubDoc.keys), ["stub-credential", "unrelated"])
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], secondAuth)
+    }
+
+    func testConcurrentPiUpdateBetweenPreparationAndWriteSurvives() throws {
+        // H4 reproduction: Pi adds an unrelated provider after Switcheroo's
+        // preparation read but before the Pi write. The locked write re-reads
+        // the document, so the fresh provider survives.
+        let (harness, _, secondId, _, _) = try makeTwoAccountHarness(
+            authTargetAdapters: [PiAuthTargetAdapter()]
+        )
+        harness.fileIO.files[piAuthPath] = Data(#"{"opencode-go": {"type": "api_key"}}"#.utf8)
+        harness.fileIO.onWriteToPath = { writtenPath in
+            if writtenPath == self.activeAuthPath {
+                harness.fileIO.files[self.piAuthPath] = Data(#"{"opencode-go": {"type": "api_key"}, "fresh-provider": {"new": true}}"#.utf8)
+            }
+        }
+
+        try harness.engine.switchToAccount(accountIdOrName: secondId)
+
+        let piDoc = try XCTUnwrap(JSONSerialization.jsonObject(with: harness.fileIO.files[piAuthPath]!) as? [String: Any])
+        XCTAssertEqual(Set(piDoc.keys), ["openai-codex", "opencode-go", "fresh-provider"])
+        let fresh = try XCTUnwrap(piDoc["fresh-provider"] as? [String: Any])
+        XCTAssertEqual(fresh["new"] as? Bool, true)
     }
 
     func testCodexReplacementAndPiSectionUpsertSemanticsRemainDistinct() throws {
@@ -106,7 +128,7 @@ final class AuthTargetSyncTests: XCTestCase {
 
     func testConversionFailureChangesNothing() throws {
         let failing = StubAuthTargetAdapter()
-        failing.documentError = AuthTargetSyncError.unsupportedSource(targetId: "stub-target", reason: "test failure")
+        failing.conversionError = AuthTargetSyncError.unsupportedSource(targetId: "stub-target", reason: "test failure")
         let (harness, _, secondId, firstAuth, _) = try makeTwoAccountHarness(
             authTargetAdapters: [failing]
         )
@@ -119,9 +141,11 @@ final class AuthTargetSyncTests: XCTestCase {
             }
         }
 
+        // Conversion fails during preparation, before any publication: nothing changed.
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], firstAuth)
         XCTAssertEqual(harness.fileIO.files[piAuthPath], piFileBefore)
         XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        XCTAssertFalse(harness.fileIO.itemExists(path: "/tmp/switcheroo-tests/state/transaction.json"))
     }
 
     func testSwitchRollsBackWhenTargetWriteFails() throws {
@@ -139,7 +163,8 @@ final class AuthTargetSyncTests: XCTestCase {
         }
 
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], firstAuth)
-        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        XCTAssertEqual(savedConfig.providers.first?.activeAccountId, firstId)
         XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
     }
 
@@ -202,8 +227,11 @@ final class AuthTargetSyncTests: XCTestCase {
         }
 
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], Data("concurrent-overwrite".utf8))
+        // Config was never persisted (the switch aborted before the config commit).
         XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
         XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
+        // The unrecoverable rollback leaves the journal for startup recovery.
+        XCTAssertTrue(harness.fileIO.itemExists(path: "/tmp/switcheroo-tests/state/transaction.json"))
     }
 
     // MARK: - Activation writes (add/import with set-active)
@@ -211,6 +239,7 @@ final class AuthTargetSyncTests: XCTestCase {
     func testFinalizeAddAccountWithSetActiveSynchronizesTargets() throws {
         let harness = try EngineHarness(authTargetAdapters: [PiAuthTargetAdapter()])
         let authData = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-work"]]),
             refreshToken: "refresh-work",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-work"]])
         )
@@ -241,13 +270,13 @@ final class AuthTargetSyncTests: XCTestCase {
             }
         }
 
-        // Keychain snapshot removed, config untouched, no active auth file left behind.
+        // Keychain snapshot removed, config restored, no active auth file left behind.
         XCTAssertTrue(harness.secureStore.items.isEmpty)
         XCTAssertNil(harness.fileIO.files["~/.codex/auth.json"])
-        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
-        let currentConfig = harness.configStore.config
-        XCTAssertTrue(currentConfig.providers.isEmpty)
-        XCTAssertNil(currentConfig.defaultProviderId)
+        let savedConfig = try XCTUnwrap(harness.configStore.savedConfigs.last)
+        XCTAssertTrue(savedConfig.providers.isEmpty)
+        XCTAssertNil(savedConfig.defaultProviderId)
+        XCTAssertTrue(harness.configStore.config.providers.isEmpty)
     }
 
     // MARK: - Fixture
@@ -256,12 +285,13 @@ final class AuthTargetSyncTests: XCTestCase {
         authTargetAdapters: [any AuthTargetAdapter]
     ) throws -> (harness: EngineHarness, firstId: String, secondId: String, firstAuth: Data, secondAuth: Data) {
         let firstAuth = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
             refreshToken: "refresh-first",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-first"]]),
             tokensAccountId: "acct-first"
         )
         let secondAuth = try makeCodexAuthData(
-            accessToken: makeJWT(payload: ["exp": 1_700_000_200]),
+            accessToken: makeJWT(payload: ["exp": 1_700_000_200, "https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
             refreshToken: "refresh-second",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-second"]]),
             tokensAccountId: "acct-second"

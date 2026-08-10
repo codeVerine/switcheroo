@@ -96,7 +96,7 @@ public struct SwitcherooCLI {
 
         case "switch":
             let idOrName = try requireArg(args, label: "account-name")
-            app.switchToAccount(idOrName: idOrName)
+            try app.switchToAccount(idOrName: idOrName)
             output("Switched.")
 
         case "delete":

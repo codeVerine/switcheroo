@@ -1,4 +1,5 @@
 import XCTest
+@testable import SwitcherooCodexProvider
 @testable import SwitcherooCore
 
 final class SwitcherooEngineTests: XCTestCase {
@@ -48,9 +49,11 @@ final class SwitcherooEngineTests: XCTestCase {
         XCTAssertEqual(provider.activeAccountId, account.id)
         XCTAssertEqual(account.name, "Work")
         XCTAssertEqual(account.identityKey, "account_id:acct-1|email:work@example.com")
-        XCTAssertEqual(try? harness.secureStore.load(key: "codex:\(pending.accountId)"), authData)
-        XCTAssertEqual(harness.fileIO.writes.map(\.path), ["~/.codex/auth.json"])
-        XCTAssertEqual(harness.fileIO.writes.first?.permissions, 0o600)
+
+        XCTAssertEqual(harness.secureStore.items["codex:\(pending.accountId)"], authData)
+        XCTAssertEqual(harness.fileIO.publishedWrites.map(\.path), ["~/.codex/auth.json"])
+        XCTAssertEqual(harness.fileIO.publishedWrites.first?.permissions, 0o600)
+        XCTAssertFalse(harness.fileIO.itemExists(path: "/tmp/switcheroo-tests/state/transaction.json"))
         XCTAssertEqual(harness.paths.removedPaths, [pending.providerHomePath])
         XCTAssertEqual(harness.provider.prepareLoginCalls.count, 1)
         XCTAssertEqual(harness.provider.launchLoginInteractiveCalls.count, 1)
@@ -212,10 +215,11 @@ final class SwitcherooEngineTests: XCTestCase {
         let provider = try XCTUnwrap(savedConfig.providers.first)
         XCTAssertEqual(provider.activeAccountId, pending.accountId)
         XCTAssertEqual(Set(provider.accounts.map(\.id)), Set([existing.id, pending.accountId]))
-        XCTAssertEqual(try? harness.secureStore.load(key: "codex:\(existing.id)"), oldData)
-        XCTAssertEqual(try? harness.secureStore.load(key: "codex:\(pending.accountId)"), newData)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, "~/.codex/auth.json")
-        XCTAssertEqual(harness.fileIO.writes.last?.data, newData)
+
+        XCTAssertEqual(harness.secureStore.items["codex:\(existing.id)"], oldData)
+        XCTAssertEqual(harness.secureStore.items["codex:\(pending.accountId)"], newData)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, "~/.codex/auth.json")
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.data, newData)
         XCTAssertEqual(harness.paths.removedPaths, [pending.providerHomePath])
     }
 
@@ -407,8 +411,8 @@ final class SwitcherooEngineTests: XCTestCase {
         XCTAssertEqual(provider.activeAccountId, second.id)
         XCTAssertEqual(active.name, "Second")
         XCTAssertNotNil(active.lastUsedAt)
-        XCTAssertEqual(harness.fileIO.writes.last?.path, activePath)
-        XCTAssertEqual(harness.fileIO.writes.last?.data, secondAuth)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.path, activePath)
+        XCTAssertEqual(harness.fileIO.publishedWrites.last?.data, secondAuth)
 
         let synced = try harness.engine.syncActiveAccountSnapshotIfNeeded()
         XCTAssertTrue(synced)
@@ -650,7 +654,8 @@ final class SwitcherooEngineTests: XCTestCase {
             secureStore: InMemorySecureStore(),
             fileIO: InMemoryFileIO(),
             paths: InMemoryPaths(),
-            providers: []
+            providers: [],
+            authTargetAdapters: [CodexAuthTargetAdapter(defaultAuthFilePath: "~/.codex/auth.json")]
         )
 
         XCTAssertThrowsError(try engine.listAccounts()) { error in

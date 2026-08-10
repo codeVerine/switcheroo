@@ -55,21 +55,27 @@ Pi auth file (auth-target sync):
 
 - Default: `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json` when set, matching Pi’s own resolution)
 - When you switch accounts, Switcheroo updates the `openai-codex` entry from the active Codex snapshot and leaves every other provider entry untouched.
-- The file (and its parent directory) is created when absent, and is written atomically with user-only permissions (`0o600`, matching Pi’s own writes).
+- The file (and its parent directory) is created when absent, and is written atomically with user-only permissions (`0o600` for the file, `0o700` for directories Switcheroo creates, matching Pi’s own writes). Temporary files are created exclusively with mode `0o600` before any bytes are written, so a permissive umask or a crash mid-write cannot expose the credential.
+
+Transaction state (crash safety):
+
+- `~/Library/Application Support/Switcheroo/state/transaction.json` records an in-flight switch (pre-images of every destination, the pre-switch config, and Keychain pre-images) with user-only permissions, and `switch.lock` serializes switches across processes.
+- The journal is written before any publication and cleared only after the switch is committed; if Switcheroo is killed mid-switch, the next launch rolls the transaction back (or completes it if the config commit already landed) before the app becomes usable.
+- Pre-image bytes may contain credentials, so journal files are created `0o600`, live only while a switch is in flight or a recovery is pending, and never appear in logs or error text.
 
 ## Pi Synchronization
 
-When you switch accounts, Switcheroo converts the selected account’s Codex snapshot into Pi’s `openai-codex` OAuth credential (access token, refresh token, expiry, and account id) and merges it into Pi’s auth file. The conversion is local and in-memory: Switcheroo does not persist parsed credential fields anywhere, and inactive account snapshots stay opaque blobs in Keychain.
+When you switch accounts, Switcheroo converts the selected account’s Codex snapshot into Pi’s `openai-codex` OAuth credential (access token, refresh token, expiry, and account id derived from the access token) and merges it into Pi’s auth file. The conversion is local and in-memory: Switcheroo does not persist parsed credential fields anywhere, and inactive account snapshots stay opaque blobs in Keychain. The update is a locked provider-scoped write using Pi’s own lock protocol (`<path>.lock` with mtime-based staleness), re-reading and re-validating the document under the lock so a concurrent Pi refresh or login is never overwritten.
 
 What this means for Pi:
 
-- No second `/logout` and `/login` flow is needed: after a switch, a freshly started Pi session authenticates as the same account Codex is using.
-- A Pi process that is already running keeps the credential it loaded at startup (Pi reads its auth file once when the process starts). Restart Pi after switching accounts.
-- If a running Pi session refreshes its own token (Pi writes the refreshed credential back), it replaces the `openai-codex` entry with its session’s account. Restart Pi promptly after switching to avoid this.
+- No second `/logout` and `/login` flow is needed: after a switch, Pi authenticates as the same account Codex is using.
+- Pi 0.83.x read `auth.json` once at process start, so a switch required restarting Pi. Pi 0.84+ compares the file revision on every credential read and reloads under the lock when another process changed it; a restart is only needed for a session whose transport is already open.
 
 Failure behavior:
 
 - If Pi’s auth file exists but cannot be read or is not a JSON object, or the Codex snapshot cannot be converted, the switch fails as a whole and reports an error; nothing is changed (this includes Codex’s own auth file). Fix or remove the broken file, then switch again.
+- A switch interrupted by a crash is rolled back or completed at the next launch from the journal. If a rollback cannot complete (for example, another process modified a file mid-switch), the error names the affected files and the journal remains as a recovery record; fix or remove the affected file, then switch again.
 - Switcheroo never exposes token contents in logs, errors, or status messages.
 
 Switcheroo does not call any Pi or OpenAI APIs and never refreshes Pi credentials itself. When Pi refreshes the synced credential during normal use, that is Pi writing to its own file; Switcheroo simply preserves whatever Pi wrote, exactly like it preserves any unrelated provider entry.

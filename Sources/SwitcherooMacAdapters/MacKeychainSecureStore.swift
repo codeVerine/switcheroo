@@ -86,6 +86,17 @@ public final class MacKeychainSecureStore: @unchecked Sendable, SwitcherooSecure
         }
     }
 
+    public func itemExists(key: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        var item: CFTypeRef?
+        let status = client.copyMatching(query as CFDictionary, &item)
+        return status == errSecSuccess
+    }
+
     private func update(_ data: Data, key: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

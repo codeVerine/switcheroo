@@ -1,12 +1,13 @@
 import Foundation
 
 // Auth-target adapters let Switcheroo mirror the selected Codex account into
-// every destination auth file through one shared switch orchestration. Codex
+// every destination auth file through one shared switch transaction. Codex
 // itself is an adapter (whole-file replacement of the active auth.json); Pi is
-// another (section upsert of openai-codex). Orchestration in SwitcherooEngine
-// stays target-agnostic: adapters own identity, destination resolution,
-// source validation/conversion, and destination-specific preservation or
-// replacement semantics; the engine owns sequencing, atomic writes, and rollback.
+// another (locked section upsert of openai-codex). Orchestration in
+// SwitcherooEngine stays target-agnostic: adapters own identity, destination
+// resolution, source validation/conversion, and destination-specific
+// preservation or replacement semantics; the engine owns transaction
+// serialization, the crash journal, and atomic rollback.
 
 public protocol AuthTargetAdapter: Sendable {
     var id: String { get }
@@ -18,17 +19,25 @@ public protocol AuthTargetAdapter: Sendable {
     /// path overrides.
     func destinationAuthFilePath(forProviderState providerState: SwitcherooProvider) -> String
 
-    /// Produce the complete destination document bytes for the source Codex
-    /// auth snapshot, applying this target's preservation/replacement semantics
-    /// against the existing destination data (`nil` when the destination file
-    /// is absent). Whole-file targets replace the document; section targets
-    /// replace only their key and preserve every unrelated top-level entry.
-    ///
-    /// Throws AuthTargetSyncError.unsupportedSource when the source snapshot
-    /// cannot be validated or converted, and
-    /// AuthTargetSyncError.malformedDestination when the existing destination
-    /// document cannot be parsed.
-    func destinationDocument(fromSourceAuthData sourceAuthData: Data, existingDestinationData: Data?) throws -> Data
+    /// Fail-fast validation/conversion of the source Codex snapshot. Returns the
+    /// credential to publish, or nil when this target has nothing to publish
+    /// (whole-file targets). Throws AuthTargetSyncError.unsupportedSource when
+    /// the snapshot is malformed, incomplete, or unsupported.
+    func convertedCredential(fromSourceAuthData sourceAuthData: Data) throws -> AuthTargetCredential?
+
+    /// Validate the existing destination document without modifying it. Throws
+    /// AuthTargetSyncError.malformedDestination when the document cannot be
+    /// parsed. Runs during preparation so deterministic destination errors fail
+    /// the transaction before any publication. `existingDestinationData` is nil
+    /// when the destination file does not exist.
+    func validateExistingDestination(existingDestinationData: Data?) throws
+
+    /// Publish the credential to the destination under the engine's transaction.
+    /// Whole-file targets replace the destination (skipping the write when it
+    /// already holds exactly the source bytes); section targets re-read under
+    /// their own lock and merge only their section, preserving every unrelated
+    /// top-level entry. Returns the bytes actually written.
+    func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data
 }
 
 /// A converted credential destined for one top-level key of the target auth document.
@@ -43,9 +52,13 @@ public struct AuthTargetCredential: Sendable, Equatable {
 }
 
 /// Type-erased JSON value used to build target credentials and merge documents.
+/// Integers are preserved exactly (Int64/UInt64 before Double), so unrelated
+/// numeric values in preserved documents never lose precision.
 public enum AuthTargetJSON: Sendable, Equatable {
     case null
     case bool(Bool)
+    case integer(Int64)
+    case unsigned(UInt64)
     case number(Double)
     case string(String)
     case array([AuthTargetJSON])
@@ -59,6 +72,10 @@ extension AuthTargetJSON: Codable {
             self = .null
         } else if let bool = try? container.decode(Bool.self) {
             self = .bool(bool)
+        } else if let integer = try? container.decode(Int64.self) {
+            self = .integer(integer)
+        } else if let unsigned = try? container.decode(UInt64.self) {
+            self = .unsigned(unsigned)
         } else if let number = try? container.decode(Double.self) {
             self = .number(number)
         } else if let string = try? container.decode(String.self) {
@@ -81,6 +98,10 @@ extension AuthTargetJSON: Codable {
         case .null:
             try container.encodeNil()
         case .bool(let value):
+            try container.encode(value)
+        case .integer(let value):
+            try container.encode(value)
+        case .unsigned(let value):
             try container.encode(value)
         case .number(let value):
             try container.encode(value)

@@ -13,19 +13,24 @@ public enum CodexAuthParsing {
         public var userId: String?
         /// `chatgpt_account_id` from the id_token's `https://api.openai.com/auth` claim.
         public var chatgptAccountId: String?
+        /// `chatgpt_account_id` from the access token's `https://api.openai.com/auth`
+        /// claim. This is the claim Pi itself validates when issuing requests.
+        public var accessTokenChatgptAccountId: String?
 
         public init(
             accessTokenExpiry: Date? = nil,
             email: String? = nil,
             accountId: String? = nil,
             userId: String? = nil,
-            chatgptAccountId: String? = nil
+            chatgptAccountId: String? = nil,
+            accessTokenChatgptAccountId: String? = nil
         ) {
             self.accessTokenExpiry = accessTokenExpiry
             self.email = email
             self.accountId = accountId
             self.userId = userId
             self.chatgptAccountId = chatgptAccountId
+            self.accessTokenChatgptAccountId = accessTokenChatgptAccountId
         }
     }
 
@@ -49,13 +54,17 @@ public enum CodexAuthParsing {
         let chatgptAccountId = doc.tokens?.id_token.flatMap {
             jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/auth", key: "chatgpt_account_id")
         }
+        let accessTokenChatgptAccountId = doc.tokens?.access_token.flatMap {
+            jwtNestedStringClaim(token: $0, claim: "https://api.openai.com/auth", key: "chatgpt_account_id")
+        }
 
         return Summary(
             accessTokenExpiry: accessTokenExp,
             email: email,
             accountId: accountId,
             userId: userId,
-            chatgptAccountId: chatgptAccountId
+            chatgptAccountId: chatgptAccountId,
+            accessTokenChatgptAccountId: accessTokenChatgptAccountId
         )
     }
 

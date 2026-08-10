@@ -8,14 +8,17 @@ final class PiAuthTargetAdapterTests: XCTestCase {
     // MARK: - Conversion
 
     func testConvertsValidCodexAuthToPiOAuthCredential() throws {
-        let accessToken = makeJWT(payload: ["exp": 1_700_000_000])
+        let accessToken = makeJWT(payload: [
+            "exp": 1_700_000_000,
+            "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-42"],
+        ])
         let authData = try makeCodexAuthData(
             accessToken: accessToken,
             refreshToken: "refresh-token-abc",
             idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-42"]])
         )
 
-        let credential = try adapter.convertedCredential(fromSourceAuthData: authData)
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
 
         XCTAssertEqual(credential.destinationKey, "openai-codex")
         guard case .object(let fields) = credential.jsonValue else {
@@ -24,22 +27,39 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         XCTAssertEqual(fields["type"], .string("oauth"))
         XCTAssertEqual(fields["access"], .string(accessToken))
         XCTAssertEqual(fields["refresh"], .string("refresh-token-abc"))
-        XCTAssertEqual(fields["expires"], .number(1_700_000_000 * 1000))
+        XCTAssertEqual(fields["expires"], .integer(1_700_000_000 * 1000))
         XCTAssertEqual(fields["accountId"], .string("chatgpt-acct-42"))
     }
 
-    func testConversionFallsBackToCodexAccountIdWhenIdTokenLacksClaim() throws {
-        let authData = try makeCodexAuthData(
-            idToken: makeJWT(payload: ["email": "person@example.com"]),
-            tokensAccountId: "codex-acct-7"
-        )
+    func testConversionUsesAccessTokenAccountIdWhenIdTokenHasNoClaim() throws {
+        let authData = try makeCodexAuthData(idToken: makeJWT(payload: ["email": "person@example.com"]))
 
-        let credential = try adapter.convertedCredential(fromSourceAuthData: authData)
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
 
         guard case .object(let fields) = credential.jsonValue else {
             return XCTFail("Expected object credential")
         }
-        XCTAssertEqual(fields["accountId"], .string("codex-acct-7"))
+        XCTAssertEqual(fields["accountId"], .string("chatgpt-acct-1"))
+    }
+
+    func testConversionRejectsAccessTokenWithoutChatgptAccountIdClaim() throws {
+        let authData = try makeCodexAuthData(
+            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "sub": "no-account-claim"]),
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"]])
+        )
+        assertUnsupported(authData, reasonContains: "no chatgpt_account_id claim")
+    }
+
+    func testConversionRejectsConflictingIdTokenAccountId() throws {
+        let authData = try makeCodexAuthData(
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "other-account"]])
+        )
+        assertUnsupported(authData, reasonContains: "conflicting account ids")
+    }
+
+    func testConversionRejectsConflictingTokensAccountId() throws {
+        let authData = try makeCodexAuthData(tokensAccountId: "other-account")
+        assertUnsupported(authData, reasonContains: "conflicting account ids")
     }
 
     func testConversionRejectsNonJSONSource() {
@@ -57,43 +77,42 @@ final class PiAuthTargetAdapterTests: XCTestCase {
     }
 
     func testConversionRejectsMissingRefreshToken() throws {
-        let data = try makeTokensData(["access_token": makeJWT(payload: ["exp": 1_700_000_000])])
+        let data = try makeTokensData(["access_token": makeJWT(payload: [
+            "exp": 1_700_000_000,
+            "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+        ])])
         assertUnsupported(data, reasonContains: "no refresh token")
-    }
-
-    func testConversionRejectsMissingAccountId() throws {
-        let data = try makeTokensData([
-            "access_token": makeJWT(payload: ["exp": 1_700_000_000]),
-            "refresh_token": "refresh",
-            "id_token": makeJWT(payload: ["email": "person@example.com"]),
-        ])
-        assertUnsupported(data, reasonContains: "no account id")
     }
 
     func testConversionRejectsAccessTokenWithoutExpiry() throws {
         let data = try makeTokensData([
-            "access_token": makeJWT(payload: ["sub": "no-expiry"]),
+            "access_token": makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"]]),
             "refresh_token": "refresh",
-            "id_token": makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "acct-1"]]),
         ])
         assertUnsupported(data, reasonContains: "no expiry")
     }
 
-    // MARK: - Document merge
+    // MARK: - Locked publication
 
-    func testMergePreservesUnrelatedProvidersAndReplacesOnlyOpenaiCodex() throws {
-        let accessToken = makeJWT(payload: ["exp": 1_700_000_000])
+    func testWriteDestinationPreservesUnrelatedProvidersAndReplacesOnlyOpenaiCodex() throws {
+        let accessToken = makeJWT(payload: [
+            "exp": 1_700_000_000,
+            "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+        ])
         let authData = try makeCodexAuthData(accessToken: accessToken, refreshToken: "refresh-token-abc")
-        let existing = Data("""
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
+        let fileIO = InMemoryFileIO()
+        let path = "~/.pi/agent/auth.json"
+        fileIO.files[path] = Data("""
         {
           "opencode-go": { "type": "api_key", "key": "placeholder-key" },
           "openai-codex": { "type": "oauth", "access": "old-access", "refresh": "old-refresh", "expires": 123, "accountId": "old-acct" }
         }
         """.utf8)
 
-        let merged = try adapter.destinationDocument(fromSourceAuthData: authData, existingDestinationData: existing)
+        let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)
 
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["openai-codex", "opencode-go"])
         let codex = try XCTUnwrap(object["openai-codex"] as? [String: Any])
         XCTAssertEqual(codex["type"] as? String, "oauth")
@@ -103,20 +122,52 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         XCTAssertEqual(codex["accountId"] as? String, "chatgpt-acct-1")
         let other = try XCTUnwrap(object["opencode-go"] as? [String: Any])
         XCTAssertEqual(other["key"] as? String, "placeholder-key")
+        XCTAssertEqual(fileIO.files[path], written)
     }
 
-    func testMergeCreatesDocumentWhenDestinationAbsent() throws {
+    func testWriteDestinationCreatesDocumentWhenDestinationAbsent() throws {
         let authData = try makeCodexAuthData()
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
+        let fileIO = InMemoryFileIO()
 
-        let merged = try adapter.destinationDocument(fromSourceAuthData: authData, existingDestinationData: nil)
+        let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: "~/.pi/agent/auth.json", fileIO: fileIO)
 
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["openai-codex"])
     }
 
-    func testMergeRejectsMalformedDestinationDocuments() throws {
+    func testWriteDestinationFailsWhenAnotherProcessHoldsTheLock() throws {
         let authData = try makeCodexAuthData()
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
+        let fileIO = InMemoryFileIO()
+        let path = "~/.pi/agent/auth.json"
+        try fileIO.createDirectoryExclusive(path: "\(path).lock")
 
+        XCTAssertThrowsError(try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)) { error in
+            guard case AuthTargetSyncError.destinationWriteFailed(let targetId, _, _) = error else {
+                return XCTFail("Expected destinationWriteFailed, got \(error)")
+            }
+            XCTAssertEqual(targetId, "pi")
+        }
+    }
+
+    func testWriteDestinationBreaksStaleLocks() throws {
+        let authData = try makeCodexAuthData()
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
+        let fileIO = InMemoryFileIO()
+        let path = "~/.pi/agent/auth.json"
+        try fileIO.createDirectoryExclusive(path: "\(path).lock")
+        fileIO.modificationDates["\(path).lock"] = Date(timeIntervalSinceNow: -120)
+
+        let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)
+
+        XCTAssertFalse(fileIO.itemExists(path: "\(path).lock"))
+        XCTAssertFalse((try JSONSerialization.jsonObject(with: written) as? [String: Any])?.isEmpty ?? true)
+    }
+
+    // MARK: - Destination validation
+
+    func testValidationRejectsMalformedDestinationDocuments() throws {
         let malformed: [Data] = [
             Data("not-json".utf8),
             Data("[1, 2, 3]".utf8),
@@ -125,7 +176,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         ]
 
         for data in malformed {
-            XCTAssertThrowsError(try adapter.destinationDocument(fromSourceAuthData: authData, existingDestinationData: data)) { error in
+            XCTAssertThrowsError(try adapter.validateExistingDestination(existingDestinationData: data)) { error in
                 guard case AuthTargetSyncError.malformedDestination(let targetId, _) = error else {
                     return XCTFail("Expected malformedDestination, got \(error)")
                 }
@@ -134,16 +185,56 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         }
     }
 
+    func testValidationAcceptsAbsentAndValidDocuments() throws {
+        try adapter.validateExistingDestination(existingDestinationData: nil)
+        try adapter.validateExistingDestination(existingDestinationData: Data(#"{"opencode-go": {}}"#.utf8))
+    }
+
+    // MARK: - Exact number preservation (unrelated provider fields)
+
+    func testMergePreservesExactIntegerValues() throws {
+        let authData = try makeCodexAuthData()
+        let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
+        let fileIO = InMemoryFileIO()
+        let path = "~/.pi/agent/auth.json"
+        fileIO.files[path] = Data("""
+        {
+          "other-provider": {
+            "big-integer": 9007199254740993,
+            "negative": -9223372036854775808,
+            "decimal": 1.5,
+            "nested": { "deep": [1, 9007199254740994, 2.5] }
+          }
+        }
+        """.utf8)
+
+        let written = try adapter.writeDestination(credential: credential, sourceAuthData: authData, destinationPath: path, fileIO: fileIO)
+
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
+        let other = try XCTUnwrap(object["other-provider"] as? [String: Any])
+        XCTAssertEqual(other["big-integer"] as? Int64, 9_007_199_254_740_993)
+        XCTAssertEqual(other["negative"] as? Int64, Int64.min)
+        XCTAssertEqual(other["decimal"] as? Double, 1.5)
+        let nested = try XCTUnwrap(other["nested"] as? [String: Any])
+        let deep = try XCTUnwrap(nested["deep"] as? [Any])
+        XCTAssertEqual(deep[0] as? Int64, 1)
+        XCTAssertEqual(deep[1] as? Int64, 9_007_199_254_740_994)
+        XCTAssertEqual(deep[2] as? Double, 2.5)
+    }
+
     // MARK: - Diagnostics
 
     func testErrorMessagesNeverContainCredentialMaterial() throws {
         let secretAccess = "SECRET-ACCESS-TOKEN-VALUE"
         let secretRefresh = "SECRET-REFRESH-TOKEN-VALUE"
         let authData = try makeCodexAuthData(
-            accessToken: makeJWT(payload: ["exp": 1_700_000_000, "secret_claim": secretAccess]),
+            accessToken: makeJWT(payload: [
+                "exp": 1_700_000_000,
+                "https://api.openai.com/auth": ["chatgpt_account_id": "chatgpt-acct-1"],
+                "secret_claim": secretAccess,
+            ]),
             refreshToken: secretRefresh,
-            idToken: makeJWT(payload: ["email": "person@example.com"]),
-            tokensAccountId: nil
+            idToken: makeJWT(payload: ["https://api.openai.com/auth": ["chatgpt_account_id": "conflicting-account"]])
         )
 
         XCTAssertThrowsError(try adapter.convertedCredential(fromSourceAuthData: authData)) { error in
@@ -172,6 +263,8 @@ final class PiAuthTargetAdapterTests: XCTestCase {
 
         XCTAssertEqual(adapter.destinationAuthFilePath(forProviderState: SwitcherooProvider(id: "codex")), "/tmp/pi-agent-test/auth.json")
     }
+
+    // MARK: - Helpers
 
     private func assertUnsupported(
         _ data: Data,

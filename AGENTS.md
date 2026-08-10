@@ -10,9 +10,13 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Pi auth-target sync sharp edges
 
-- Switching accounts in Switcheroo also rewrites Pi's `openai-codex` credential in `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json`). See `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift` for the verified schema and conversion rules.
-- Pi reads its auth file once at process start (`AuthStorage` reloads only in its constructor). A running Pi session keeps its old account and, when it refreshes its token, overwrites the synced credential with its own session's account. Restart Pi after switching.
-- The authoritative Pi source lives outside this repo: `@earendil-works/pi-coding-agent` (installed e.g. at `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`); its `dist/core/auth-storage.js` and `dist/auth/oauth/openai-codex.js` (under `pi-ai`) define auth.json layout and credential semantics.
+- Switching accounts in Switcheroo also rewrites Pi's `openai-codex` credential in `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json`). See `Sources/SwitcherooPiAdapter/PiAuthTargetAdapter.swift` for the verified schema and conversion rules. The write is a Pi-compatible locked provider-scoped update (`<path>.lock` directory with mtime staleness, matching Pi's `proper-lockfile`).
+- Pi credential semantics by version: Pi 0.83.x read auth.json once at process start (restart required after switching). Pi 0.84+ (`readLatestData` in `dist/core/auth-storage.js`) detects external file revisions and reloads under the lock before the next credential read; a restart is only needed for an already-open session/transport. Pi's `chatgpt_account_id` is derived from the access token, so the adapter requires that claim and rejects conflicting id-token/`tokens.account_id` values.
+- The authoritative Pi source lives outside this repo: `@earendil-works/pi-coding-agent` (installed e.g. at `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`); its `dist/core/auth-storage.js` and `dist/auth/oauth/openai-codex.js` (under `pi-ai`) define auth.json layout, lock, and credential semantics.
+
+## Transaction journal sharp edges
+
+- Account switches journal to `~/Library/Application Support/Switcheroo/state/transaction.json` (0600) before any publication and clear it after commit; startup reconciliation rolls back or completes an interrupted transaction. A leftover journal after a failed switch is intentional (recovery record), and an unreadable journal blocks engine startup until removed. The cross-process `switch.lock` (flock) serializes every switch, including CLI vs menu-bar.
 
 ## Maintaining this file
 

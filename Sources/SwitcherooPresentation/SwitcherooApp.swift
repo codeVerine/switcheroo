@@ -526,7 +526,7 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
     }
 
-    public func switchToAccount(idOrName: String) {
+    public func switchToAccount(idOrName: String) throws {
         do {
             let providerId = resolveSelectedProviderId()
             _ = try? engine.syncActiveAccountSnapshot(providerId: providerId)
@@ -537,6 +537,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             lock.lock()
             state.errorMessage = errorMessage(from: error)
             lock.unlock()
+            throw error
         }
     }
 

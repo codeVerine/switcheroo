@@ -69,25 +69,31 @@ A usage failure only affects that account's row; the account itself, the other r
 
 ## “I switched accounts but Pi still acts like the old account”
 
-Switcheroo writes Pi’s `openai-codex` credential during a switch, but Pi loads its auth file once when the process starts.
+Switcheroo writes Pi’s `openai-codex` credential during a switch.
 
 > [!IMPORTANT]
-> After switching accounts, restart any running Pi session. A running Pi keeps its old account in memory, and if it refreshes its own token it overwrites the synced credential with its session’s account.
+> Pi 0.83.x reads its auth file once when the process starts, so restart Pi after switching. Pi 0.84+ detects external auth-file changes automatically on the next credential read; a restart is only needed for a session that is already open.
 
 Try:
 
-- Quit and restart `pi` (`/logout` is not needed)
-- If Pi still shows the old account after a restart, check `~/.pi/agent/auth.json`: it should have an `openai-codex` entry. If the file was overwritten by a stale session, switch accounts again in Switcheroo.
+- Quit and restart `pi` (`/logout` is not needed) if you are on Pi 0.83.x or have an already-open session
+- If Pi still shows the old account after a restart, check `~/.pi/agent/auth.json`: it should have an `openai-codex` entry. If it does not, switch accounts again in Switcheroo.
 
 ## “Switch fails with a Pi sync error”
 
-A switch updates both `~/.codex/auth.json` and `~/.pi/agent/auth.json`. If Pi’s file cannot be read, is not a valid JSON object, or the Codex snapshot cannot be converted, the switch fails as a whole and nothing is changed. This is intentional: it prevents the two files from drifting apart.
+A switch updates both `~/.codex/auth.json` and `~/.pi/agent/auth.json` in one crash-safe transaction. If Pi’s file cannot be read, is not a valid JSON object, the Codex snapshot cannot be converted, or two targets resolve to the same file, the switch fails as a whole and nothing is changed. This is intentional: it prevents the two files from drifting apart.
 
 Fixes to try:
 
 1. Check the error message for the offending path (token contents never appear).
 2. If `~/.pi/agent/auth.json` was hand-edited or truncated, repair it or remove it - Switcheroo recreates it with user-only permissions on the next switch.
-3. If the error mentions a rollback failure, one of the auth files could not be restored to its previous state; fix or remove the affected file and switch again.
+3. If the error mentions a rollback failure or a leftover transaction journal (`~/Library/Application Support/Switcheroo/state/transaction.json`), one of the auth files could not be restored to its previous state; fix or remove the affected file and switch again, or delete the journal after confirming the files are consistent.
+
+## “Switcheroo won’t start after a crash”
+
+A switch interrupted by a crash (power loss, force quit mid-switch) leaves a transaction journal. On the next launch Switcheroo automatically rolls the switch back or completes it.
+
+If the journal is unreadable, the app reports the journal path and stays stopped to avoid guessing. Fix or remove the journal file after confirming `~/.codex/auth.json` and `~/.pi/agent/auth.json` hold the account you expect.
 
 ## Reset Switcheroo
 
