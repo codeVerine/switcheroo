@@ -645,6 +645,14 @@ public final class SwitcherooEngine: @unchecked Sendable {
         let writtenData: Data
     }
 
+    /// Signals that a target write failed and this call's own compare-and-swap
+    /// restore of previously-written targets could not fully recover; the
+    /// caller must still attempt Keychain and config rollback and aggregate
+    /// every failure.
+    private struct TargetRollbackIncomplete: Error {
+        let unrestoredPaths: [String]
+    }
+
     private struct KeychainChange {
         enum Operation {
             case store(Data)
@@ -690,7 +698,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
             } else {
                 existing = nil
             }
-            try entry.adapter.validateExistingDestination(existingDestinationData: existing)
+            try entry.adapter.validateExistingDestination(existingDestinationData: existing, destinationPath: entry.path)
 
             prepared.append(PreparedTarget(
                 adapter: entry.adapter,
@@ -720,9 +728,7 @@ public final class SwitcherooEngine: @unchecked Sendable {
             } catch {
                 let unrecoverable = restoreTargetFiles(written)
                 if !unrecoverable.isEmpty {
-                    throw AuthTargetSyncError.rollbackIncomplete(
-                        message: "Account switch failed; these auth files could not be restored: \(unrecoverable.joined(separator: ", ")). Fix or remove them, then switch accounts again."
-                    )
+                    throw TargetRollbackIncomplete(unrestoredPaths: unrecoverable)
                 }
                 throw AuthTargetSyncError.destinationWriteFailed(
                     targetId: item.adapter.id,
@@ -879,10 +885,15 @@ public final class SwitcherooEngine: @unchecked Sendable {
                 try deleteJournal(txid: journal.txid)
             } catch let error {
                 // A target-level rollback failure already left some destination
-                // unrestored; the journal must survive so startup reconciliation
-                // can retry it.
-                if case AuthTargetSyncError.rollbackIncomplete = error {
-                    throw error
+                // unrestored; still attempt Keychain and config rollback and
+                // aggregate every failure. The journal must survive regardless,
+                // so startup reconciliation can retry the unrestored target.
+                if let targetFailure = error as? TargetRollbackIncomplete {
+                    let failures = targetFailure.unrestoredPaths
+                        + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: previousConfig)
+                    throw AuthTargetSyncError.rollbackIncomplete(
+                        message: "Account switch failed and could not be fully rolled back. Failed to restore: \(failures.joined(separator: "; ")). Fix or remove the affected files, then switch again. A recovery record remains at \(journalPath)."
+                    )
                 }
                 let failures = rollbackEverything(
                     writtenTargets: writtenTargets,
@@ -903,9 +914,13 @@ public final class SwitcherooEngine: @unchecked Sendable {
     /// Undo every published mutation in reverse order, collecting every failure
     /// (targets, Keychain, config) so none is silently discarded.
     private func rollbackEverything(writtenTargets: [WrittenTarget], appliedChanges: [KeychainChange], previousConfig: SwitcherooConfig) -> [String] {
-        var failures: [String] = []
+        restoreTargetFiles(writtenTargets) + rollbackKeychainAndConfig(appliedChanges: appliedChanges, previousConfig: previousConfig)
+    }
 
-        failures += restoreTargetFiles(writtenTargets)
+    /// Undo applied Keychain changes in reverse order and restore the previous
+    /// config, collecting every failure so none is silently discarded.
+    private func rollbackKeychainAndConfig(appliedChanges: [KeychainChange], previousConfig: SwitcherooConfig) -> [String] {
+        var failures: [String] = []
 
         for change in appliedChanges.reversed() {
             do {

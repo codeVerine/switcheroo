@@ -604,7 +604,7 @@ final class StubAuthTargetAdapter: @unchecked Sendable, AuthTargetAdapter {
         }
     }
 
-    func validateExistingDestination(existingDestinationData: Data?) throws {
+    func validateExistingDestination(existingDestinationData: Data?, destinationPath: String) throws {
         validationCalls += 1
     }
 

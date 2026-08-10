@@ -1,6 +1,6 @@
 import XCTest
 import SwitcherooCore
-import SwitcherooPiAdapter
+@testable import SwitcherooPiAdapter
 
 final class PiAuthTargetAdapterTests: XCTestCase {
     private var adapter: PiAuthTargetAdapter { PiAuthTargetAdapter() }
@@ -137,6 +137,15 @@ final class PiAuthTargetAdapterTests: XCTestCase {
     }
 
     func testWriteDestinationFailsWhenAnotherProcessHoldsTheLock() throws {
+        let originalDeadline = PiAuthFileLock.acquireDeadline
+        let originalPollInterval = PiAuthFileLock.pollInterval
+        PiAuthFileLock.acquireDeadline = 0.2
+        PiAuthFileLock.pollInterval = 0.01
+        defer {
+            PiAuthFileLock.acquireDeadline = originalDeadline
+            PiAuthFileLock.pollInterval = originalPollInterval
+        }
+
         let authData = try makeCodexAuthData()
         let credential = try XCTUnwrap(adapter.convertedCredential(fromSourceAuthData: authData))
         let fileIO = InMemoryFileIO()
@@ -176,7 +185,7 @@ final class PiAuthTargetAdapterTests: XCTestCase {
         ]
 
         for data in malformed {
-            XCTAssertThrowsError(try adapter.validateExistingDestination(existingDestinationData: data)) { error in
+            XCTAssertThrowsError(try adapter.validateExistingDestination(existingDestinationData: data, destinationPath: "~/.pi/agent/auth.json")) { error in
                 guard case AuthTargetSyncError.malformedDestination(let targetId, _) = error else {
                     return XCTFail("Expected malformedDestination, got \(error)")
                 }
@@ -186,8 +195,8 @@ final class PiAuthTargetAdapterTests: XCTestCase {
     }
 
     func testValidationAcceptsAbsentAndValidDocuments() throws {
-        try adapter.validateExistingDestination(existingDestinationData: nil)
-        try adapter.validateExistingDestination(existingDestinationData: Data(#"{"opencode-go": {}}"#.utf8))
+        try adapter.validateExistingDestination(existingDestinationData: nil, destinationPath: "~/.pi/agent/auth.json")
+        try adapter.validateExistingDestination(existingDestinationData: Data(#"{"opencode-go": {}}"#.utf8), destinationPath: "~/.pi/agent/auth.json")
     }
 
     // MARK: - Exact number preservation (unrelated provider fields)

@@ -29,8 +29,9 @@ public protocol AuthTargetAdapter: Sendable {
     /// AuthTargetSyncError.malformedDestination when the document cannot be
     /// parsed. Runs during preparation so deterministic destination errors fail
     /// the transaction before any publication. `existingDestinationData` is nil
-    /// when the destination file does not exist.
-    func validateExistingDestination(existingDestinationData: Data?) throws
+    /// when the destination file does not exist. `destinationPath` is the
+    /// engine's canonicalized path, so errors reference the file actually read.
+    func validateExistingDestination(existingDestinationData: Data?, destinationPath: String) throws
 
     /// Publish the credential to the destination under the engine's transaction.
     /// Whole-file targets replace the destination (skipping the write when it

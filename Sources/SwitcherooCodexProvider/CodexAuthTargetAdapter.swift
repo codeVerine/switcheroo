@@ -25,7 +25,7 @@ public struct CodexAuthTargetAdapter: AuthTargetAdapter {
         return nil
     }
 
-    public func validateExistingDestination(existingDestinationData: Data?) throws {
+    public func validateExistingDestination(existingDestinationData: Data?, destinationPath: String) throws {
         // Whole-file target: any existing bytes are replaced wholesale.
     }
 

@@ -221,16 +221,18 @@ final class AuthTargetSyncTests: XCTestCase {
         }
 
         XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: secondId)) { error in
-            guard case AuthTargetSyncError.rollbackIncomplete = error else {
+            guard case AuthTargetSyncError.rollbackIncomplete(let message) = error else {
                 return XCTFail("Expected rollbackIncomplete, got \(error)")
             }
+            XCTAssertTrue(message.contains(activeAuthPath))
         }
 
         XCTAssertEqual(harness.fileIO.files[activeAuthPath], Data("concurrent-overwrite".utf8))
-        // Config was never persisted (the switch aborted before the config commit).
-        XCTAssertTrue(harness.configStore.savedConfigs.isEmpty)
+        // The unrestored target does not stop the in-process config rollback:
+        // it is attempted and succeeds (the config was never mutated forward).
+        XCTAssertEqual(harness.configStore.savedConfigs.last?.providers.first?.activeAccountId, firstId)
         XCTAssertEqual(harness.configStore.config.providers.first?.activeAccountId, firstId)
-        // The unrecoverable rollback leaves the journal for startup recovery.
+        // The unrecoverable target rollback leaves the journal for startup recovery.
         XCTAssertTrue(harness.fileIO.itemExists(path: "/tmp/switcheroo-tests/state/transaction.json"))
     }
 

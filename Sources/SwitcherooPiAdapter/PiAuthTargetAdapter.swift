@@ -76,8 +76,8 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         )
     }
 
-    public func validateExistingDestination(existingDestinationData: Data?) throws {
-        _ = try parseDocument(existingDestinationData)
+    public func validateExistingDestination(existingDestinationData: Data?, destinationPath: String) throws {
+        _ = try parseDocument(existingDestinationData, destinationPath: destinationPath)
     }
 
     public func writeDestination(credential: AuthTargetCredential?, sourceAuthData: Data, destinationPath: String, fileIO: SwitcherooFileIO) throws -> Data {
@@ -96,7 +96,7 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         } else {
             existing = nil
         }
-        _ = try parseDocument(existing)
+        _ = try parseDocument(existing, destinationPath: destinationPath)
 
         let merged = try AuthTargetDocument.merging(credential, into: existing, targetId: id, destinationPath: destinationPath)
         try fileIO.writeFileAtomically(merged, path: destinationPath, permissions: 0o600)
@@ -123,15 +123,15 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
         return doc.tokens
     }
 
-    private func parseDocument(_ data: Data?) throws -> [String: AuthTargetJSON] {
+    private func parseDocument(_ data: Data?, destinationPath: String) throws -> [String: AuthTargetJSON] {
         guard let data, !data.isEmpty else {
             if data == nil { return [:] }
-            throw AuthTargetSyncError.malformedDestination(targetId: id, path: resolvedDestinationAuthFilePath)
+            throw AuthTargetSyncError.malformedDestination(targetId: id, path: destinationPath)
         }
         do {
             return try JSONDecoder().decode([String: AuthTargetJSON].self, from: data)
         } catch {
-            throw AuthTargetSyncError.malformedDestination(targetId: id, path: resolvedDestinationAuthFilePath)
+            throw AuthTargetSyncError.malformedDestination(targetId: id, path: destinationPath)
         }
     }
 
@@ -146,8 +146,9 @@ public struct PiAuthTargetAdapter: AuthTargetAdapter {
 /// Pi's auth-file lock: an exclusive `<path>.lock` directory with mtime-based
 /// staleness, matching the `proper-lockfile` protocol Pi uses.
 struct PiAuthFileLock {
-    private static let staleThreshold: TimeInterval = 30
-    private static let acquireDeadline: TimeInterval = 30
+    nonisolated(unsafe) static var staleThreshold: TimeInterval = 30
+    nonisolated(unsafe) static var acquireDeadline: TimeInterval = 30
+    nonisolated(unsafe) static var pollInterval: TimeInterval = 0.05
 
     let lockPath: String
     private let fileIO: SwitcherooFileIO
@@ -176,7 +177,7 @@ struct PiAuthFileLock {
                     try? fileIO.removeItem(path: lockPath)
                     continue
                 }
-                Thread.sleep(forTimeInterval: 0.05)
+                Thread.sleep(forTimeInterval: pollInterval)
             }
         }
         throw AuthTargetSyncError.destinationWriteFailed(
