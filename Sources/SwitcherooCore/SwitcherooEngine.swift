@@ -971,14 +971,22 @@ public final class SwitcherooEngine: @unchecked Sendable {
             }
             let preparedTargets = try plan.prepareTargets()
 
+            let txid = UUID().uuidString
             var journal = TransactionJournal(
-                txid: UUID().uuidString,
+                txid: txid,
                 createdAt: Date(),
                 configCommitted: false,
                 committedConfig: nil,
                 previousConfig: plan.previousConfig,
-                targets: preparedTargets.map {
-                    TransactionJournal.Target(id: $0.adapter.id, path: $0.destinationPath, previous: $0.previous)
+                targets: preparedTargets.enumerated().map { index, target in
+                    TransactionJournal.Target(
+                        id: target.adapter.id,
+                        path: target.destinationPath,
+                        previous: target.previous,
+                        quarantinePath: target.previous == nil
+                            ? "\(target.destinationPath).switcheroo-quarantine.\(txid).\(index)"
+                            : nil
+                    )
                 },
                 keychainChanges: plan.keychainChanges.map { change in
                     let opName: String
@@ -995,22 +1003,15 @@ public final class SwitcherooEngine: @unchecked Sendable {
             var appliedChanges: [KeychainChange] = []
             let journalPath = try transactionJournalPath()
             let prepareRollback: (inout [WrittenTarget]) throws -> Void = { targets in
-                var changed = false
                 for index in targets.indices {
                     guard targets[index].previous == nil else { continue }
-                    guard let targetIndex = journal.targets.firstIndex(where: { $0.path == targets[index].destinationPath }) else {
+                    guard let targetIndex = journal.targets.firstIndex(where: { $0.path == targets[index].destinationPath }),
+                          let quarantinePath = journal.targets[targetIndex].quarantinePath else {
                         throw AuthTargetSyncError.rollbackIncomplete(
                             message: "Account switch rollback could not identify a journaled auth target. A recovery record remains at \(journalPath)."
                         )
                     }
-                    if journal.targets[targetIndex].quarantinePath == nil {
-                        journal.targets[targetIndex].quarantinePath = "\(targets[index].destinationPath).switcheroo-quarantine.\(journal.txid).\(targetIndex)"
-                        changed = true
-                    }
-                    targets[index].quarantinePath = journal.targets[targetIndex].quarantinePath
-                }
-                if changed {
-                    try self.writeJournal(journal)
+                    targets[index].quarantinePath = quarantinePath
                 }
             }
 
@@ -1176,6 +1177,12 @@ public final class SwitcherooEngine: @unchecked Sendable {
             )
         }
 
+        guard ensureJournalQuarantinePaths(&journal) else {
+            throw AuthTargetSyncError.rollbackIncomplete(
+                message: "Recovery of an interrupted account switch could not durably prepare its auth quarantine paths. Fix or remove the affected transaction journal at \(path), then switch accounts again."
+            )
+        }
+
         for index in journal.targets.indices {
             guard resolveJournalQuarantine(&journal, targetIndex: index) else {
                 throw AuthTargetSyncError.rollbackIncomplete(
@@ -1193,6 +1200,18 @@ public final class SwitcherooEngine: @unchecked Sendable {
                     message: "Recovery of the committed account switch is ambiguous. Fix or remove the affected transaction journal at \(path), then switch accounts again."
                 )
             }
+            if journal.targets.contains(where: { $0.quarantinePath != nil }) {
+                for index in journal.targets.indices {
+                    journal.targets[index].quarantinePath = nil
+                }
+                do {
+                    try writeJournal(journal)
+                } catch {
+                    throw AuthTargetSyncError.rollbackIncomplete(
+                        message: "Recovery of the committed account switch could not clear its auth quarantine record. Retry the operation so recovery can finish."
+                    )
+                }
+            }
             try fileIO.removeItem(path: path)
             return
         }
@@ -1204,9 +1223,12 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
 
         var failures: [String] = []
-        for target in journal.targets {
+        for index in journal.targets.indices {
+            let target = journal.targets[index]
             if !restoreJournalTarget(target) {
                 failures.append(target.path)
+            } else if journal.targets[index].quarantinePath != nil {
+                journal.targets[index].quarantinePath = nil
             }
         }
         for change in journal.keychainChanges.reversed() {
@@ -1223,6 +1245,13 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
 
         if failures.isEmpty {
+            do {
+                try writeJournal(journal)
+            } catch {
+                throw AuthTargetSyncError.rollbackIncomplete(
+                    message: "Recovery restored the interrupted account switch but could not clear its auth quarantine record. Retry the operation so recovery can finish."
+                )
+            }
             lock.lock()
             config = journal.previousConfig
             lock.unlock()
@@ -1240,26 +1269,32 @@ public final class SwitcherooEngine: @unchecked Sendable {
         }
     }
 
+    private func ensureJournalQuarantinePaths(_ journal: inout TransactionJournal) -> Bool {
+        var changed = false
+        for index in journal.targets.indices {
+            guard journal.targets[index].previous == nil,
+                  journal.targets[index].quarantinePath == nil else { continue }
+            journal.targets[index].quarantinePath = "\(journal.targets[index].path).switcheroo-quarantine.\(journal.txid).\(index)"
+            changed = true
+        }
+        guard changed else { return true }
+        do {
+            try writeJournal(journal)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func resolveJournalQuarantine(_ journal: inout TransactionJournal, targetIndex: Int) -> Bool {
         guard let quarantinePath = journal.targets[targetIndex].quarantinePath else { return true }
+        guard fileIO.itemExists(path: quarantinePath) else { return true }
         guard let expected = journal.targets[targetIndex].expected else { return false }
-
-        if !fileIO.itemExists(path: quarantinePath) {
-            journal.targets[targetIndex].quarantinePath = nil
-            do {
-                try writeJournal(journal)
-                return true
-            } catch {
-                return false
-            }
-        }
 
         guard let quarantined = try? fileIO.readFile(path: quarantinePath) else { return false }
         if quarantined == expected {
             do {
                 try fileIO.removeItem(path: quarantinePath)
-                journal.targets[targetIndex].quarantinePath = nil
-                try writeJournal(journal)
                 return true
             } catch {
                 return false
@@ -1269,8 +1304,6 @@ public final class SwitcherooEngine: @unchecked Sendable {
         guard !fileIO.fileExists(path: journal.targets[targetIndex].path) else { return false }
         do {
             try fileIO.moveItemAtomically(from: quarantinePath, to: journal.targets[targetIndex].path)
-            journal.targets[targetIndex].quarantinePath = nil
-            try writeJournal(journal)
             return true
         } catch {
             return false

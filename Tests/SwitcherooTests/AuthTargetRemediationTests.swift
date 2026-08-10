@@ -167,7 +167,41 @@ final class AuthTargetRemediationTests: XCTestCase {
         XCTAssertNil(fileIO.files[quarantinePath])
         XCTAssertTrue(fileIO.itemExists(path: journalPath))
         let journal = try JSONDecoder().decode(TransactionJournal.self, from: try XCTUnwrap(fileIO.files[journalPath]))
-        XCTAssertNil(journal.targets.first?.quarantinePath)
+        XCTAssertEqual(journal.targets.first?.quarantinePath, quarantinePath)
+    }
+
+    func testStartupAllocatesMissingQuarantineBeforeRestoringNilPreimage() throws {
+        let previousConfig = SwitcherooConfig()
+        let published = Data("published".utf8)
+        let fileIO = InMemoryFileIO()
+        fileIO.files[activeAuthPath] = published
+        fileIO.files[journalPath] = try JSONEncoder().encode(TransactionJournal(
+            txid: "crash-5",
+            createdAt: Date(),
+            configCommitted: false,
+            previousConfig: previousConfig,
+            targets: [
+                TransactionJournal.Target(
+                    id: "codex",
+                    path: activeAuthPath,
+                    previous: nil,
+                    expected: published
+                ),
+            ],
+            keychainChanges: []
+        ))
+
+        _ = try SwitcherooEngine(
+            configStore: InMemoryConfigStore(config: previousConfig),
+            secureStore: InMemorySecureStore(),
+            fileIO: fileIO,
+            paths: InMemoryPaths(),
+            providers: [StubProvider()],
+            authTargetAdapters: [CodexAuthTargetAdapter(defaultAuthFilePath: activeAuthPath)]
+        )
+
+        XCTAssertNil(fileIO.files[activeAuthPath])
+        XCTAssertFalse(fileIO.itemExists(path: journalPath))
     }
 
     func testRollbackJournalsQuarantineBeforeRemovingNilPreimage() throws {
@@ -198,20 +232,20 @@ final class AuthTargetRemediationTests: XCTestCase {
         harness.fileIO.files[activeAuthPath] = firstAuth
         harness.fileIO.failWritePaths.insert(activeAuthPath)
 
-        var observedJournaledQuarantine = false
-        harness.fileIO.onAtomicRemoveMove = { path, _ in
+        var observedPrepublishedQuarantine = false
+        harness.fileIO.onWriteToPath = { path in
             guard path == "~/.stub-target/auth.json",
                   let data = harness.fileIO.files[self.journalPath],
                   let journal = try? JSONDecoder().decode(TransactionJournal.self, from: data) else {
                 return
             }
-            observedJournaledQuarantine = journal.targets.contains {
+            observedPrepublishedQuarantine = journal.targets.contains {
                 $0.path == path && $0.quarantinePath != nil
             }
         }
 
         XCTAssertThrowsError(try harness.engine.switchToAccount(accountIdOrName: second.id))
-        XCTAssertTrue(observedJournaledQuarantine)
+        XCTAssertTrue(observedPrepublishedQuarantine)
         XCTAssertFalse(harness.fileIO.itemExists(path: "~/.stub-target/auth.json"))
     }
 
