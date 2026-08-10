@@ -29,8 +29,8 @@ public protocol SwitcherooAppControlling: AnyObject {
 extension SwitcherooApp: SwitcherooAppControlling {}
 
 extension SwitcherooAppControlling {
-    /// Convenience for callers that do not distinguish usage triggers
-    /// (menu-open semantics; the CLI wires no usage fetcher anyway).
+    /// Metadata-only convenience (menu-open semantics): reloads account
+    /// metadata without fetching usage. The CLI wires no usage fetcher anyway.
     public func refresh() {
         refresh(usageTrigger: .menuOpen)
     }

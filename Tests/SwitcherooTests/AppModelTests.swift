@@ -285,4 +285,50 @@ final class AppModelTests: XCTestCase {
             "the auth-sync timer path must not trigger a usage refresh while the menu is closed"
         )
     }
+
+    func testMenuOpenRefreshForwardsMenuOpenTriggerOnly() {
+        let account = makeAccount(id: "acc-1", name: "Account")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account]))
+        let model = AppModel(app: app)
+
+        model.refresh()
+
+        XCTAssertEqual(
+            app.refreshTriggers,
+            [.menuOpen],
+            "opening the menu must use the metadata-only menuOpen trigger and never fetch usage"
+        )
+    }
+
+    func testTieredUsageRefreshForwardsTieredTriggerAndSnapshots() {
+        let account = makeAccount(id: "acc-1", name: "Account")
+        let app = MockSwitcherooApp(state: SwitcherooAppState(accounts: [account]))
+        app.nextSnapshot = SwitcherooAppState(accounts: [makeAccount(id: "acc-2", name: "After")])
+        let model = AppModel(app: app)
+
+        model.refreshTieredUsage()
+
+        XCTAssertEqual(app.refreshTriggers, [.tieredTimer])
+        XCTAssertEqual(model.state.accounts.map(\.name), ["After"])
+    }
+
+    func testStartTimersSchedulesTieredUsageRefresh() {
+        let app = MockSwitcherooApp()
+        let model = AppModel(app: app, startTimers: true, usageTimerInterval: 0.01)
+
+        // Pump the main run loop briefly: the tiered usage timer must fire at
+        // least once with the tiered trigger.
+        let deadline = Date().addingTimeInterval(0.5)
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            if app.refreshTriggers.contains(.tieredTimer) {
+                break
+            }
+        }
+
+        XCTAssertTrue(
+            app.refreshTriggers.contains(.tieredTimer),
+            "starting timers must schedule the tiered usage refresh"
+        )
+    }
 }

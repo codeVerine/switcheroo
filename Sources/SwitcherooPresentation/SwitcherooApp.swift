@@ -11,18 +11,26 @@ public struct ProviderDescriptor: Hashable, Identifiable, Sendable {
     }
 }
 
-/// Why a usage refresh is being requested. Menu-open refreshes may keep fresh
-/// cached rows; account switches and account-set changes always start a new
+/// Why a refresh is being requested. Opening the menu renders cached usage and
+/// never fetches; account switches and account-set changes always start a new
 /// generation so old in-flight results can never land under a changed selection.
 public enum UsageRefreshTrigger: Sendable, Equatable {
-    /// Menu open, window focus, or ordinary user refresh: the freshness cache
-    /// applies and in-flight same-generation fetches are not duplicated.
+    /// Menu open, window focus, or ordinary user refresh: metadata-only. The
+    /// cached per-account usage rows are rendered as-is and no usage request
+    /// is ever initiated from this trigger.
     case menuOpen
+    /// App launch: one all-account seeding generation so the cache is populated
+    /// immediately, bypassing the freshness cache (nothing is cached yet).
+    case launch
     /// An account switch: a full all-account generation, bypassing the cache.
     case accountSwitch
     /// Accounts were added, imported, or deleted: a generation boundary, with
     /// the freshness cache applying to the rows that remain live.
     case accountSetChanged
+    /// Background tiered timer: refresh the active account when its result is
+    /// older than the active tier interval (5 minutes) and inactive accounts
+    /// when older than the inactive tier interval (30 minutes).
+    case tieredTimer
 }
 
 public struct SwitcherooAppState: Sendable {
@@ -80,7 +88,12 @@ public final class SwitcherooApp: @unchecked Sendable {
     private let engine: SwitcherooEngine
     private let fileIO: SwitcherooFileIO
     private let usageFetcher: (any AccountUsageFetching)?
-    private let usageStalenessInterval: TimeInterval
+    /// How old a loaded result may be before the active account is refreshed
+    /// by the tiered timer (5 minutes).
+    private let usageActiveRefreshInterval: TimeInterval
+    /// How old a loaded result may be before an inactive account is refreshed
+    /// by the tiered timer (30 minutes).
+    private let usageInactiveRefreshInterval: TimeInterval
     private let usageFailureCooldown: TimeInterval
     private let clock: @Sendable () -> Date
 
@@ -97,20 +110,23 @@ public final class SwitcherooApp: @unchecked Sendable {
     private var usageInFlightByAccount: [String: Int] = [:]
     private var usageLastAttemptByAccount: [String: Date] = [:]
     private var usageRetryAfterByAccount: [String: Int] = [:]
+    private var usageFailureCountByAccount: [String: Int] = [:]
 
     public init(
         engine: SwitcherooEngine,
         fileIO: SwitcherooFileIO,
         providers: [ProviderDescriptor],
         usageFetcher: (any AccountUsageFetching)? = nil,
-        usageStalenessInterval: TimeInterval = 60,
+        usageActiveRefreshInterval: TimeInterval = 300,
+        usageInactiveRefreshInterval: TimeInterval = 1800,
         usageFailureCooldown: TimeInterval = 30,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.engine = engine
         self.fileIO = fileIO
         self.usageFetcher = usageFetcher
-        self.usageStalenessInterval = usageStalenessInterval
+        self.usageActiveRefreshInterval = usageActiveRefreshInterval
+        self.usageInactiveRefreshInterval = usageInactiveRefreshInterval
         self.usageFailureCooldown = usageFailureCooldown
         self.clock = clock
         self.state = SwitcherooAppState(providers: providers)
@@ -123,7 +139,8 @@ public final class SwitcherooApp: @unchecked Sendable {
         fileIO: SwitcherooFileIO,
         providers: [ProviderDescriptor],
         usageFetcher: (any AccountUsageFetching)? = nil,
-        usageStalenessInterval: TimeInterval = 60,
+        usageActiveRefreshInterval: TimeInterval = 300,
+        usageInactiveRefreshInterval: TimeInterval = 1800,
         usageFailureCooldown: TimeInterval = 30,
         now: @escaping @Sendable () -> Date
     ) {
@@ -132,7 +149,8 @@ public final class SwitcherooApp: @unchecked Sendable {
             fileIO: fileIO,
             providers: providers,
             usageFetcher: usageFetcher,
-            usageStalenessInterval: usageStalenessInterval,
+            usageActiveRefreshInterval: usageActiveRefreshInterval,
+            usageInactiveRefreshInterval: usageInactiveRefreshInterval,
             usageFailureCooldown: usageFailureCooldown,
             clock: now
         )
@@ -142,12 +160,19 @@ public final class SwitcherooApp: @unchecked Sendable {
         usageTask?.cancel()
     }
 
+    /// Metadata-only refresh (menu-open semantics): reloads account metadata
+    /// and renders the cached usage rows without ever fetching usage.
     public func refresh() {
         refresh(usageTrigger: .menuOpen)
     }
 
     public func refresh(usageTrigger: UsageRefreshTrigger) {
         refreshAccountsMetadata()
+        guard usageTrigger != .menuOpen else {
+            // Opening the menu renders the current cached usage state; it must
+            // never itself initiate usage fetching.
+            return
+        }
         let accountIds = withState { $0.accounts.map(\.id) }
         let activeAccountId = withState { $0.activeAccountId }
         refreshUsageIfNeeded(accountIds: accountIds, activeAccountId: activeAccountId, trigger: usageTrigger)
@@ -208,12 +233,15 @@ public final class SwitcherooApp: @unchecked Sendable {
     /// - Every account is fetched with its own saved credential; results stay
     ///   keyed by account id so each dropdown row shows its own usage.
     /// - A bounded `.loading` state is published synchronously per account.
-    /// - Repeated calls (view refresh, window focus) are cheap: accounts are
-    ///   skipped while a same-generation fetch is in flight, when a fresh
-    ///   result exists, or while a failed row is inside its retry cooldown.
-    /// - `.accountSwitch` bypasses those guards and always starts one
-    ///   all-account generation; `.accountSetChanged` always advances the
-    ///   generation so a deleted account's in-flight result can never publish.
+    /// - Repeated timer ticks are cheap: accounts are skipped while a
+    ///   same-generation fetch is in flight, when their tier interval has not
+    ///   elapsed, or while a failed row is inside its retry cooldown.
+    /// - `.launch` and `.accountSwitch` bypass those guards and always start
+    ///   one all-account generation; `.accountSetChanged` and `.tieredTimer`
+    ///   apply the tiered freshness rules, and both always advance the
+    ///   generation so a deleted or superseded account's result can never
+    ///   publish.
+    /// - `.menuOpen` never fetches: it is handled before the batch is planned.
     /// - One account's failure only marks that account unavailable; the other
     ///   rows keep their own results (partial-failure isolation).
     private func refreshUsageIfNeeded(accountIds: [String], activeAccountId: String?, trigger: UsageRefreshTrigger) {
@@ -225,6 +253,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             usageInFlightByAccount = [:]
             usageLastAttemptByAccount = [:]
             usageRetryAfterByAccount = [:]
+            usageFailureCountByAccount = [:]
             state.usageStatesByAccountId = [:]
             usageProviderId = nil
             lock.unlock()
@@ -241,6 +270,7 @@ public final class SwitcherooApp: @unchecked Sendable {
             usageInFlightByAccount = [:]
             usageLastAttemptByAccount = [:]
             usageRetryAfterByAccount = [:]
+            usageFailureCountByAccount = [:]
             state.usageStatesByAccountId = [:]
             usageProviderId = providerId
         }
@@ -252,15 +282,23 @@ public final class SwitcherooApp: @unchecked Sendable {
         usageInFlightByAccount = usageInFlightByAccount.filter { liveIds.contains($0.key) }
         usageLastAttemptByAccount = usageLastAttemptByAccount.filter { liveIds.contains($0.key) }
         usageRetryAfterByAccount = usageRetryAfterByAccount.filter { liveIds.contains($0.key) }
+        usageFailureCountByAccount = usageFailureCountByAccount.filter { liveIds.contains($0.key) }
 
         let currentTime = clock()
         var pending: [String]
 
         switch trigger {
-        case .accountSwitch:
-            // Required all-account generation for a switch: bypass the
-            // freshness cache, in-flight guards, and failure cooldowns. The
-            // newly active account is ordered first so its row resolves first.
+        case .menuOpen:
+            // Defensive: `refresh(usageTrigger:)` routes menu-open to a
+            // metadata-only refresh, so this case is unreachable. A menu-open
+            // trigger must never fetch.
+            lock.unlock()
+            return
+        case .launch, .accountSwitch:
+            // Required all-account generation for launch seeding and account
+            // switches: bypass the freshness cache, in-flight guards, and
+            // failure cooldowns. The active account is ordered first so its
+            // row resolves first.
             if let activeAccountId, accountIds.contains(activeAccountId) {
                 pending = [activeAccountId] + accountIds.filter { $0 != activeAccountId }
             } else {
@@ -272,10 +310,13 @@ public final class SwitcherooApp: @unchecked Sendable {
             // needs a fetch, so superseded in-flight results cannot land.
             usageTask?.cancel()
             usageTask = nil
-            pending = pendingAccounts(accountIds: accountIds, now: currentTime, bypassCache: false)
+            pending = pendingAccounts(accountIds: accountIds, activeAccountId: activeAccountId, now: currentTime)
             usageGeneration += 1
-        case .menuOpen:
-            pending = pendingAccounts(accountIds: accountIds, now: currentTime, bypassCache: false)
+        case .tieredTimer:
+            // Background tiered refresh: only accounts whose tier interval has
+            // elapsed are due. When nothing is due, leave the current
+            // generation untouched so in-flight results can still land.
+            pending = pendingAccounts(accountIds: accountIds, activeAccountId: activeAccountId, now: currentTime)
             guard !pending.isEmpty else {
                 lock.unlock()
                 return
@@ -319,20 +360,25 @@ public final class SwitcherooApp: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Accounts that need a fetch right now: not fresh, not inside a failure
-    /// cooldown, and not already running in the current generation.
-    private func pendingAccounts(accountIds: [String], now: Date, bypassCache: Bool) -> [String] {
+    /// Accounts that need a fetch right now: the active account when its loaded
+    /// result is older than the active tier interval, inactive accounts when
+    /// older than the inactive tier interval; never inside a failure cooldown;
+    /// never already running in the current generation.
+    private func pendingAccounts(accountIds: [String], activeAccountId: String?, now: Date) -> [String] {
         var pending: [String] = []
         for accountId in accountIds {
+            let tierInterval = (accountId == activeAccountId)
+                ? usageActiveRefreshInterval
+                : usageInactiveRefreshInterval
             switch state.usageStatesByAccountId[accountId] {
-            case .loaded(let usage) where !bypassCache && now.timeIntervalSince(usage.fetchedAt) < usageStalenessInterval:
+            case .loaded(let usage) where now.timeIntervalSince(usage.fetchedAt) < tierInterval:
                 continue
-            case .unavailable where !bypassCache && isWithinFailureCooldown(accountId: accountId, now: now):
+            case .unavailable where isWithinFailureCooldown(accountId: accountId, now: now, isActive: accountId == activeAccountId):
                 continue
             default:
                 break
             }
-            if !bypassCache, usageInFlightByAccount[accountId] == usageGeneration {
+            if usageInFlightByAccount[accountId] == usageGeneration {
                 continue
             }
             pending.append(accountId)
@@ -340,10 +386,28 @@ public final class SwitcherooApp: @unchecked Sendable {
         return pending
     }
 
-    private func isWithinFailureCooldown(accountId: String, now: Date) -> Bool {
+    /// Returns true when the account is still inside its failure cooldown
+    /// window. Active accounts use a flat 30-second cooldown for fast
+    /// recovery; inactive accounts use per-account exponential backoff
+    /// (1, 2, 4, 8, 16 min, capped at 30 min) reset after each success.
+    /// A server Retry-After header is always honoured when longer.
+    private func isWithinFailureCooldown(accountId: String, now: Date, isActive: Bool) -> Bool {
         guard let lastAttempt = usageLastAttemptByAccount[accountId] else { return false }
         let retryAfter = usageRetryAfterByAccount[accountId] ?? 0
-        let cooldown = max(usageFailureCooldown, TimeInterval(retryAfter))
+        let baseCooldown: TimeInterval
+        if isActive {
+            baseCooldown = usageFailureCooldown
+        } else {
+            let failureCount = usageFailureCountByAccount[accountId] ?? 0
+            if failureCount > 0 {
+                let backoffMinutes: [TimeInterval] = [60, 120, 240, 480, 960, 1800]
+                let index = min(failureCount - 1, backoffMinutes.count - 1)
+                baseCooldown = backoffMinutes[index]
+            } else {
+                baseCooldown = usageFailureCooldown
+            }
+        }
+        let cooldown = max(baseCooldown, TimeInterval(retryAfter))
         return now.timeIntervalSince(lastAttempt) < cooldown
     }
 
@@ -465,6 +529,11 @@ public final class SwitcherooApp: @unchecked Sendable {
         }
         self.state.usageStatesByAccountId[accountId] = outcome.state
         usageInFlightByAccount[accountId] = nil
+        if case .loaded = outcome.state {
+            usageFailureCountByAccount[accountId] = nil
+        } else {
+            usageFailureCountByAccount[accountId] = (usageFailureCountByAccount[accountId] ?? 0) + 1
+        }
         if let retryAfterSeconds = outcome.retryAfterSeconds {
             usageRetryAfterByAccount[accountId] = retryAfterSeconds
         } else {
@@ -482,7 +551,10 @@ public final class SwitcherooApp: @unchecked Sendable {
         lock.lock()
         state.selectedProviderId = providerId
         lock.unlock()
-        refresh()
+        // A provider change invalidates every cached usage row: force a
+        // generation boundary so stale results from the previous provider can
+        // never land and the new provider's rows are (re)populated.
+        refresh(usageTrigger: .accountSetChanged)
     }
 
     public func startAddAccount(name: String) {
