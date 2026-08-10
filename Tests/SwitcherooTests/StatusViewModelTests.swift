@@ -215,8 +215,10 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.accounts[0].usage?.text, "5h 58% · 1w 60%")
         XCTAssertEqual(viewModel.accounts[0].usage?.kind, .loaded)
         XCTAssertFalse(viewModel.accounts[0].usage?.hasLowRemaining ?? true)
+        XCTAssertEqual(viewModel.accounts[0].usage?.colorToken, .textSecondary)
         XCTAssertEqual(viewModel.accounts[1].usage?.text, "5h 10% · 1w 30%")
         XCTAssertTrue(viewModel.accounts[1].usage?.hasLowRemaining ?? false)
+        XCTAssertEqual(viewModel.accounts[1].usage?.colorToken, .danger, "low-balance usage must render red")
     }
 
     func testUsageDisplayLoadingAndUnavailableStates() {
@@ -229,6 +231,7 @@ final class StatusViewModelTests: XCTestCase {
         let loading = StatusViewModel(state: loadingState, renameDraftAccountId: nil, now: now)
         XCTAssertEqual(loading.accounts[0].usage?.text, "Checking usage…")
         XCTAssertEqual(loading.accounts[0].usage?.kind, .loading)
+        XCTAssertEqual(loading.accounts[0].usage?.colorToken, .textTertiary)
 
         let unavailableState = SwitcherooAppState(
             accounts: [active],
@@ -239,6 +242,7 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(unavailable.accounts[0].usage?.text, "Usage unavailable")
         XCTAssertEqual(unavailable.accounts[0].usage?.kind, .unavailable)
         XCTAssertEqual(unavailable.accounts[0].usage?.detail, "Could not reach the usage service (offline?)")
+        XCTAssertEqual(unavailable.accounts[0].usage?.colorToken, .warning)
     }
 
     func testUsageDisplayFlagsLowRemainingAndIncludesResetDetail() {

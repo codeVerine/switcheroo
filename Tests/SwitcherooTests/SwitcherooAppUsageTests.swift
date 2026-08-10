@@ -24,7 +24,8 @@ final class SwitcherooAppUsageTests: XCTestCase {
     private func makeApp(
         harness: EngineHarness,
         fetcher: MockAccountUsageFetcher,
-        stalenessInterval: TimeInterval = 60,
+        activeRefreshInterval: TimeInterval = 300,
+        inactiveRefreshInterval: TimeInterval = 1800,
         failureCooldown: TimeInterval = 30,
         clock: FakeClock? = nil
     ) -> SwitcherooApp {
@@ -39,7 +40,8 @@ final class SwitcherooAppUsageTests: XCTestCase {
             fileIO: harness.fileIO,
             providers: [ProviderDescriptor(id: "codex", displayName: "Codex")],
             usageFetcher: fetcher,
-            usageStalenessInterval: stalenessInterval,
+            usageActiveRefreshInterval: activeRefreshInterval,
+            usageInactiveRefreshInterval: inactiveRefreshInterval,
             usageFailureCooldown: failureCooldown,
             now: now
         )
@@ -152,7 +154,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
     }
 
-    func testRefreshFetchesUsageForAllAccounts() async throws {
+    func testLaunchSeedsEverySavedAccountOnce() async throws {
         let (harness, fetcher) = try makeHarness(
             accounts: [("acc-1", "Primary"), ("acc-2", "Backup")],
             activeId: "acc-1"
@@ -161,7 +163,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setResult(accountId: "acc-2", usage: usage("acc-2"))
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         let state = await waitForTerminalState(app, accountId: "acc-1")
         guard case .loaded(let loaded) = state else {
@@ -178,6 +180,36 @@ final class SwitcherooAppUsageTests: XCTestCase {
         XCTAssertEqual(backupLoaded.accountId, "acc-2")
     }
 
+    func testMenuOpenNeverFetchesUsage() async throws {
+        let counter = Counter()
+        let clock = FakeClock()
+        let acc1Usage = usage("acc-1", fetchedAt: clock.now)
+        let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
+        fetcher.setHandler(accountId: "acc-1") {
+            counter.increment()
+            return acc1Usage
+        }
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
+
+        // Seed the cache first.
+        app.refresh(usageTrigger: .launch)
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        XCTAssertEqual(counter.value, 1)
+
+        // Opening the menu (default refresh and explicit menuOpen trigger) must
+        // render the cached rows without initiating any network fetch, even
+        // when the cached result is stale.
+        clock.advance(by: 3600)
+        app.refresh()
+        app.refresh(usageTrigger: .menuOpen)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(counter.value, 1, "opening the menu must never fetch usage")
+        guard case .loaded = app.snapshot().usageStatesByAccountId["acc-1"] else {
+            return XCTFail("menu open must keep the cached loaded row")
+        }
+    }
+
     func testRefreshPublishesLoadingStateSynchronously() async throws {
         let gate = Gate()
         let acc1Usage = usage("acc-1")
@@ -188,7 +220,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         let loadingState = app.snapshot().usageStatesByAccountId["acc-1"]
         guard case .loading = loadingState else {
@@ -220,7 +252,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         _ = await waitForTerminalState(app, accountId: "acc-2")
         XCTAssertEqual(counter.value, 2)
@@ -243,7 +275,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         XCTAssertEqual(counter.value, 4, "the switch must run one fresh all-account batch")
     }
 
-    func testSupersededBatchFoldsInFlightAccountAndDropsOldGeneration() async throws {
+    func testTieredTimerFoldsInFlightAccountAndDropsOldGeneration() async throws {
         let gate = Gate()
         let counter = Counter()
         let clock = FakeClock()
@@ -264,14 +296,16 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
         let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
-        app.refresh()
-        // Batch 1: acc-1 is blocked in flight; acc-2 loads.
+        // Batch 1 (launch): acc-1 is blocked in flight; acc-2 loads.
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(counter.value, 2)
 
-        // acc-2 ages past the 60s staleness window, so a second refresh starts
-        // a new batch; the still-in-flight acc-1 must fold into it.
-        clock.advance(by: 61)
-        app.refresh()
+        // 31 minutes later both tiers are stale (active 5m, inactive 30m), so
+        // the tiered timer starts a new batch; the still-in-flight acc-1 must
+        // fold into it so its row resolves under the new generation.
+        clock.advance(by: 31 * 60)
+        app.refresh(usageTrigger: .tieredTimer)
 
         guard case .loading = app.snapshot().usageStatesByAccountId["acc-1"] else {
             return XCTFail("acc-1 must stay loading while superseded, got \(String(describing: app.snapshot().usageStatesByAccountId["acc-1"]))")
@@ -292,56 +326,99 @@ final class SwitcherooAppUsageTests: XCTestCase {
         XCTAssertEqual(final.accountId, "acc-1")
     }
 
-    func testRefreshDoesNotDuplicateFetchWhileLoading() async throws {
+    func testTieredTimerDoesNotDuplicateOrLeakWork() async throws {
         let gate = Gate()
-        let counter = Counter()
-        let acc1Usage = usage("acc-1")
-        let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
-        fetcher.setHandler(accountId: "acc-1") {
-            counter.increment()
-            await gate.wait()
-            return acc1Usage
-        }
-        let app = makeApp(harness: harness, fetcher: fetcher)
-
-        app.refresh()
-        app.refresh()
-        app.refresh()
-        // Wait for the single in-flight fetch to actually start executing.
-        await waitForCounter(counter, expected: 1)
-
-        XCTAssertEqual(counter.value, 1, "duplicate refreshes while loading must not start new requests")
-
-        gate.open()
-        _ = await waitForTerminalState(app, accountId: "acc-1")
-        XCTAssertEqual(counter.value, 1)
-    }
-
-    func testRefreshSkipsFreshResultsAndRefetchesStaleOnes() async throws {
         let counter = Counter()
         let clock = FakeClock()
         let acc1Usage = usage("acc-1", fetchedAt: clock.now)
         let (harness, fetcher) = try makeHarness(accounts: [("acc-1", "Primary")], activeId: "acc-1")
         fetcher.setHandler(accountId: "acc-1") {
             counter.increment()
+            await gate.wait()
             return acc1Usage
         }
         let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
+        // Wait for the single in-flight fetch to actually start executing.
+        await waitForCounter(counter, expected: 1)
+
+        // Repeated tiered ticks while the fetch is in flight must not start
+        // new requests (same-generation in-flight guard).
+        app.refresh(usageTrigger: .tieredTimer)
+        app.refresh(usageTrigger: .tieredTimer)
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(counter.value, 1, "tiered ticks must not duplicate in-flight work")
+
+        gate.open()
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(counter.value, 1)
 
-        // Fresh result (clock unchanged): skip.
-        app.refresh()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(counter.value, 1)
+        // After the row loads, ticks inside the tier interval stay cheap: no
+        // work is scheduled for a still-fresh account.
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(counter.value, 1, "tiered ticks must not leak work for fresh rows")
 
-        // Once the clock advances past the 60s staleness window, refresh again.
-        clock.advance(by: 61)
-        app.refresh()
+        // Once the active tier elapses, exactly one refresh happens.
+        clock.advance(by: 5 * 60)
+        app.refresh(usageTrigger: .tieredTimer)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(counter.value, 2)
+    }
+
+    func testTieredTimerRefreshesActiveOnFiveMinuteCadenceAndInactiveOnThirty() async throws {
+        let counter = Counter()
+        let clock = FakeClock()
+        let acc1Usage = usage("acc-1", fetchedAt: clock.now)
+        let acc2Usage = usage("acc-2", fetchedAt: clock.now)
+        let (harness, fetcher) = try makeHarness(
+            accounts: [("acc-1", "Primary"), ("acc-2", "Backup")],
+            activeId: "acc-1"
+        )
+        fetcher.setHandler(accountId: "acc-1") {
+            counter.increment()
+            return acc1Usage
+        }
+        fetcher.setHandler(accountId: "acc-2") {
+            counter.increment()
+            return acc2Usage
+        }
+        let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
+
+        // Launch seeds both accounts.
+        app.refresh(usageTrigger: .launch)
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(counter.value, 2)
+
+        // Inside both tiers: no refetch.
+        clock.advance(by: 4 * 60)
+        app.refresh(usageTrigger: .tieredTimer)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(counter.value, 2)
+
+        // At 5 minutes the active account refreshes; the inactive one does not.
+        clock.advance(by: 1 * 60)
+        app.refresh(usageTrigger: .tieredTimer)
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        XCTAssertEqual(counter.value, 3)
+        XCTAssertEqual(fetcher.callAccountIds.filter { $0 == "acc-1" }.count, 2)
+        XCTAssertEqual(
+            fetcher.callAccountIds.filter { $0 == "acc-2" }.count,
+            1,
+            "inactive accounts must not refresh before 30 minutes"
+        )
+
+        // At 30 minutes the inactive account refreshes too, and the active one
+        // is stale again (30 - 5 = 25 minutes since its last refresh).
+        clock.advance(by: 25 * 60)
+        app.refresh(usageTrigger: .tieredTimer)
+        _ = await waitForTerminalState(app, accountId: "acc-1")
+        _ = await waitForTerminalState(app, accountId: "acc-2")
+        XCTAssertEqual(counter.value, 5)
+        XCTAssertEqual(fetcher.callAccountIds.filter { $0 == "acc-2" }.count, 2)
     }
 
     func testPartialFailureIsolationKeepsOtherRowsAndSwitchWorking() async throws {
@@ -353,7 +430,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setResult(accountId: "acc-2", usage: usage("acc-2"))
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         let state = await waitForTerminalState(app, accountId: "acc-1")
         guard case .unavailable(let reason) = state else {
@@ -381,7 +458,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         try? harness.secureStore.delete(key: "codex:acc-1")
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         let state = await waitForTerminalState(app, accountId: "acc-1")
         guard case .unavailable = state else {
@@ -398,7 +475,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
             providers: [ProviderDescriptor(id: "codex", displayName: "Codex")]
         )
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         XCTAssertTrue(app.snapshot().usageStatesByAccountId.isEmpty)
     }
@@ -412,7 +489,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
             counter.increment()
         }
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-1")
 
         XCTAssertGreaterThanOrEqual(counter.value, 1, "live views must be notified when a usage result lands")
@@ -433,7 +510,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setResult(accountId: "acc-2", usage: acc2Usage)
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-2")
 
         app.deleteAccount(idOrName: "acc-2")
@@ -458,7 +535,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         let callbackCounter = Counter()
         app.onUsageUpdated = { callbackCounter.increment() }
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         await waitUntil { fetcher.callAccountIds.count == 1 }
         guard case .loading = app.snapshot().usageStatesByAccountId["acc-1"] else {
             return XCTFail("expected in-flight loading state, got \(String(describing: app.snapshot().usageStatesByAccountId["acc-1"]))")
@@ -493,7 +570,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setDefaultResult(usage("acc-2"))
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         await waitUntil { fetcher.callAccountIds.count == 1 }
 
         // Add a second account while acc-1's fetch is still in flight.
@@ -536,7 +613,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         }
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         // Only the rolling limit may run at once; the rest wait in the queue.
         await waitUntil { fetcher.callAccountIds.count == 3 }
@@ -569,7 +646,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         let app = makeApp(harness: harness, fetcher: fetcher)
 
         // Batch A: three children start and block; the rest wait in the queue.
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         await waitUntil { fetcher.callAccountIds.count == 3 }
 
         // A switch starts batch B (new generation, active account first) while
@@ -603,7 +680,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setResult(accountId: "acc-2", usage: usage("acc-2"))
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         _ = await waitForTerminalState(app, accountId: "acc-2")
 
@@ -625,7 +702,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
         let (harness, fetcher) = try makeHarness(accounts: [])
         let app = makeApp(harness: harness, fetcher: fetcher)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
 
         XCTAssertTrue(app.snapshot().usageStatesByAccountId.isEmpty)
         XCTAssertEqual(fetcher.callAccountIds, [])
@@ -647,18 +724,18 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setError(accountId: "acc-1", error: SwitcherooUsageError.networkUnavailable)
         let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(fetcher.callAccountIds.count, 1)
 
         // Inside the cooldown (clock unchanged): no retry.
-        app.refresh()
+        app.refresh(usageTrigger: .tieredTimer)
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(fetcher.callAccountIds.count, 1, "failed rows must not be retried inside the cooldown")
 
         // Past the 30s cooldown: retry happens.
         clock.advance(by: 31)
-        app.refresh()
+        app.refresh(usageTrigger: .tieredTimer)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(fetcher.callAccountIds.count, 2)
     }
@@ -669,13 +746,13 @@ final class SwitcherooAppUsageTests: XCTestCase {
         fetcher.setError(accountId: "acc-1", error: SwitcherooUsageError.serviceUnavailable(retryAfterSeconds: 600))
         let app = makeApp(harness: harness, fetcher: fetcher, clock: clock)
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertEqual(fetcher.callAccountIds.count, 1)
 
         // Even past the 30s default cooldown, the server's 600s hint wins.
         clock.advance(by: 120)
-        app.refresh()
+        app.refresh(usageTrigger: .tieredTimer)
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(fetcher.callAccountIds.count, 1, "the server Retry-After hint must extend the cooldown")
     }
@@ -689,7 +766,7 @@ final class SwitcherooAppUsageTests: XCTestCase {
             harness.secureStore.recordedLoadedKeys.filter { $0 == "codex:acc-1" }.count
         }
 
-        app.refresh()
+        app.refresh(usageTrigger: .launch)
         _ = await waitForTerminalState(app, accountId: "acc-1")
         XCTAssertTrue(fetcher.callAccountIds.isEmpty)
         let loadsAfterFirstRefresh = credentialLoadCount()
@@ -697,14 +774,14 @@ final class SwitcherooAppUsageTests: XCTestCase {
         // Inside the cooldown, a refresh must not re-read the missing
         // credential or put the row back into loading. Only the metadata
         // refresh reads the store, so the delta stays at one load.
-        app.refresh()
+        app.refresh(usageTrigger: .tieredTimer)
         try await Task.sleep(nanoseconds: 50_000_000)
         let deltaInsideCooldown = credentialLoadCount() - loadsAfterFirstRefresh
         XCTAssertEqual(deltaInsideCooldown, 1, "missing-credential rows must respect the failure cooldown")
 
         // Past the cooldown the credential is read again (metadata + usage prep).
         clock.advance(by: 31)
-        app.refresh()
+        app.refresh(usageTrigger: .tieredTimer)
         try await Task.sleep(nanoseconds: 50_000_000)
         let deltaPastCooldown = credentialLoadCount() - loadsAfterFirstRefresh - deltaInsideCooldown
         XCTAssertEqual(deltaPastCooldown, 2)

@@ -61,7 +61,7 @@ Try:
 Switcheroo shows each account row's remaining five-hour and weekly allowance when it can. If a usage row shows `Usage unavailable`, hover it for a hint:
 
 - **Sign-in may have expired** - the saved access token was rejected by the usage endpoint. Make the account active and run `codex login` to refresh its saved snapshot, or use "Import logged-in account" after logging in.
-- **Could not reach the usage service (offline?)** - no network connection or the endpoint timed out. Usage will retry the next time the menu is opened.
+- **Could not reach the usage service (offline?)** - no network connection or the endpoint timed out. Usage retries on the next scheduled refresh: the active account's 5-minute (or an inactive account's 30-minute) tier, the next account switch, or a relaunch.
 - **Usage service is busy or unavailable right now** - the endpoint returned an error or a rate-limit response. Retry shortly.
 - **Unexpected usage response** - the endpoint's response shape changed or was malformed. The account itself is unaffected; switching still works.
 

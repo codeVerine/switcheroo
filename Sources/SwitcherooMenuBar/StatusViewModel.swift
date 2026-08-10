@@ -129,6 +129,16 @@ struct StatusViewModel: Equatable, Sendable {
             case unavailable
         }
 
+        /// Semantic color token so the menu bar can style usage rows without
+        /// baking AppKit colors into the view model. Low-balance rows render
+        /// red (danger); unavailable rows keep the orange warning.
+        enum ColorToken: Equatable, Sendable {
+            case textSecondary
+            case textTertiary
+            case warning
+            case danger
+        }
+
         let text: String
         let kind: Kind
         /// Tooltip detail: reset timing for loaded usage, or the (secret-free)
@@ -136,6 +146,19 @@ struct StatusViewModel: Equatable, Sendable {
         let detail: String?
         /// True when any window has less than 25% remaining.
         let hasLowRemaining: Bool
+
+        /// Low-balance usage information is styled red (danger) to stand out
+        /// from the neutral secondary text and the orange unavailable hint.
+        var colorToken: ColorToken {
+            switch kind {
+            case .loaded:
+                return hasLowRemaining ? .danger : .textSecondary
+            case .loading:
+                return .textTertiary
+            case .unavailable:
+                return .warning
+            }
+        }
 
         private static let lowRemainingThreshold = 25.0
 

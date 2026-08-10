@@ -365,13 +365,15 @@ struct AccountRow: View {
     }
 
     private func usageColor(_ usage: StatusViewModel.UsageDisplay) -> Color {
-        switch usage.kind {
-        case .loaded:
-            return usage.hasLowRemaining ? Theme.warning : Theme.textSecondary
-        case .loading:
+        switch usage.colorToken {
+        case .textSecondary:
+            return Theme.textSecondary
+        case .textTertiary:
             return Theme.textTertiary
-        case .unavailable:
+        case .warning:
             return Theme.warning
+        case .danger:
+            return Theme.danger
         }
     }
 

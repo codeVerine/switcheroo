@@ -26,3 +26,6 @@ When updating this file, preserve this bar for all agents and keep entries conci
 ## Codex backend API facts
 - Usage endpoint: `GET {base}/wham/usage` (ChatGPT style, base `https://chatgpt.com/backend-api`) or `{base}/api/codex/usage` (Codex API style). Auth: `Authorization: Bearer <access_token>` + `ChatGPT-Account-ID: <tokens.account_id>` when present. Response reports `used_percent` per window (`rate_limit.primary_window` 5h / `secondary_window` 1w) with `limit_window_seconds` and `reset_at`; remaining allowance is derived as `clamp(100 - used, 0, 100)`.
 - Authoritative source: openai/codex repo (`codex-rs/backend-client/src/client/rate_limit_resets.rs`, `codex-rs/codex-api/src/rate_limits.rs`, `codex-rs/model-provider/src/auth.rs`, `codex-rs/tui/src/chatwidget/rate_limits.rs`). Switcheroo's implementation: `Sources/SwitcherooCodexProvider/CodexAPIClient.swift` + `CodexUsageFetcher.swift`.
+
+## Usage refresh scheduling
+- Opening the menu renders cached usage and never fetches. App launch seeds every account once; while running, the active account refreshes every 5 minutes and inactive accounts every 30 minutes (tiered freshness in `Sources/SwitcherooPresentation/SwitcherooApp.swift`, ticked by `AppModel`'s 60s timer); account switches always refresh all accounts. Low-balance (<25% remaining) usage text renders red.

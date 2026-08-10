@@ -14,8 +14,10 @@ final class AppModel: ObservableObject {
     private let app: (any SwitcherooAppControlling)?
     private let timersEnabled: Bool
     private let statusMessageAutoDismissNanoseconds: UInt64
+    private let usageTimerInterval: TimeInterval
     private var pollTimer: Timer?
     private var syncTimer: Timer?
+    private var usageTimer: Timer?
     private var statusMessageDismissTask: Task<Void, Never>?
     private static let reloginRecheckInterval: TimeInterval = 60
 
@@ -27,14 +29,19 @@ final class AppModel: ObservableObject {
             self.state = app.snapshot()
             self.timersEnabled = true
             self.statusMessageAutoDismissNanoseconds = 3_000_000_000
+            self.usageTimerInterval = 60
             app.onUsageUpdated = Self.makeUsageUpdatedHandler(for: self)
             _ = app.syncActiveSnapshot()
-            refresh()
+            // Seed the usage cache immediately so the first menu open already
+            // has every account's allowance.
+            refresh(usageTrigger: .launch)
             scheduleAutoSync()
+            scheduleUsageRefresh()
         } catch {
             self.app = nil
             self.timersEnabled = false
             self.statusMessageAutoDismissNanoseconds = 3_000_000_000
+            self.usageTimerInterval = 60
             self.state = SwitcherooAppState(errorMessage: error.localizedDescription)
         }
     }
@@ -42,20 +49,26 @@ final class AppModel: ObservableObject {
     init(
         app: any SwitcherooAppControlling,
         startTimers: Bool = false,
-        statusMessageAutoDismissNanoseconds: UInt64 = 3_000_000_000
+        statusMessageAutoDismissNanoseconds: UInt64 = 3_000_000_000,
+        usageTimerInterval: TimeInterval = 60
     ) {
         self.app = app
         self.timersEnabled = startTimers
         self.statusMessageAutoDismissNanoseconds = statusMessageAutoDismissNanoseconds
+        self.usageTimerInterval = usageTimerInterval
         self.state = app.snapshot()
         app.onUsageUpdated = Self.makeUsageUpdatedHandler(for: self)
         if startTimers {
             scheduleAutoSync()
+            scheduleUsageRefresh()
         }
     }
 
     deinit {
         statusMessageDismissTask?.cancel()
+        MainActor.assumeIsolated {
+            usageTimer?.invalidate()
+        }
     }
 
     /// Re-reads the app snapshot when async usage results land so the open
@@ -69,12 +82,48 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Refreshes account metadata and renders the cached usage rows. Opening
+    /// the menu never initiates usage fetching; the cached per-account usage
+    /// state is shown as-is.
     func refresh() {
         guard let app else { return }
         app.refresh(usageTrigger: .menuOpen)
         state = app.snapshot()
         if state.errorMessage != nil {
             clearStatusMessage()
+        }
+    }
+
+    /// Launches a refresh with an explicit usage trigger (launch seeding,
+    /// tiered timer, account changes). `refresh()` keeps menu-open semantics.
+    private func refresh(usageTrigger: UsageRefreshTrigger) {
+        guard let app else { return }
+        app.refresh(usageTrigger: usageTrigger)
+        state = app.snapshot()
+        if state.errorMessage != nil {
+            clearStatusMessage()
+        }
+    }
+
+    /// Tiered usage refresh tick: the app layer decides which accounts are due
+    /// (active every 5 minutes, inactive every 30), so repeated ticks never
+    /// duplicate in-flight or still-fresh work.
+    func refreshTieredUsage() {
+        guard let app else { return }
+        app.refresh(usageTrigger: .tieredTimer)
+        state = app.snapshot()
+    }
+
+    /// Schedules the low-frequency tick that drives the tiered usage refresh.
+    /// Re-scheduling invalidates any previous timer so a single tick loop is
+    /// ever active.
+    private func scheduleUsageRefresh() {
+        guard timersEnabled else { return }
+        usageTimer?.invalidate()
+        usageTimer = Timer.scheduledTimer(withTimeInterval: usageTimerInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshTieredUsage()
+            }
         }
     }
 
