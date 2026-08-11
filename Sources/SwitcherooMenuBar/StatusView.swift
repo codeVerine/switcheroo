@@ -336,12 +336,22 @@ struct AccountRow: View {
             }
 
             if let usage = account.usage {
-                Text(usage.text)
-                    .font(.system(size: 10.5, weight: .regular))
-                    .tracking(0.0525)
-                    .foregroundStyle(usageColor(usage))
-                    .lineLimit(1)
-                    .help(usage.detail ?? usage.text)
+                if usage.kind == .loaded {
+                    ForEach(usage.windows) { window in
+                        Text(window.text)
+                            .font(.system(size: 10.5, weight: .regular))
+                            .tracking(0.0525)
+                            .foregroundStyle(windowColor(window.colorToken))
+                            .help(usage.detail ?? window.text)
+                    }
+                } else {
+                    Text(usage.text)
+                        .font(.system(size: 10.5, weight: .regular))
+                        .tracking(0.0525)
+                        .foregroundStyle(usageColor(usage))
+                        .lineLimit(1)
+                        .help(usage.detail ?? usage.text)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -365,7 +375,11 @@ struct AccountRow: View {
     }
 
     private func usageColor(_ usage: StatusViewModel.UsageDisplay) -> Color {
-        switch usage.colorToken {
+        windowColor(usage.colorToken)
+    }
+
+    private func windowColor(_ token: StatusViewModel.UsageDisplay.ColorToken) -> Color {
+        switch token {
         case .textSecondary:
             return Theme.textSecondary
         case .textTertiary:

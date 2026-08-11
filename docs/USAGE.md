@@ -30,7 +30,14 @@ For Pi reload behavior after a switch, see [Troubleshooting](./TROUBLESHOOTING.m
 
 ## Usage Display
 
-Menu bar only; the CLI does not fetch or show usage. Every account row in the dropdown shows that account's remaining allowance under its name, for example `5h 58% · 1w 16%` (five-hour and weekly windows). Hover for reset timing. Details:
+Menu bar only; the CLI does not fetch or show usage. Every account row in the dropdown shows that account's remaining allowance under its name. Each applicable usage window (five-hour and weekly) renders its own compact line with the remaining percentage and the reset date/time visible inline — no hover required. For example:
+
+```
+5h 58% — resets Wed 12:13 AM
+1w 16% — resets Sat 10:13 PM
+```
+
+When a window has no reset timestamp the line omits the reset portion (e.g. `5h 58%`). Details:
 
 - **When it loads**: on app launch Switcheroo immediately fetches usage for every saved account once, seeding the cache. While the app runs, the active account refreshes every 5 minutes and inactive accounts every 30 minutes. Switching accounts always starts one fresh all-account batch, even when rows are still cached. Opening the menu never fetches; it renders the cached rows.
 - **Live updates**: results appear in the open dropdown as they arrive; rows briefly show `Checking usage…` and then settle into their loaded value without needing to close and reopen the menu.

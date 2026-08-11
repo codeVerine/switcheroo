@@ -86,7 +86,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(oneAccount.accountListMaxHeight, 74)
+        XCTAssertEqual(oneAccount.accountListMaxHeight, 82)
 
         let fourAccounts = StatusViewModel(
             state: SwitcherooAppState(accounts: [
@@ -98,7 +98,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(fourAccounts.accountListMaxHeight, 266)
+        XCTAssertEqual(fourAccounts.accountListMaxHeight, 298)
 
         let fiveAccounts = StatusViewModel(
             state: SwitcherooAppState(accounts: [
@@ -111,7 +111,7 @@ final class StatusViewModelTests: XCTestCase {
             renameDraftAccountId: nil,
             now: now
         )
-        XCTAssertEqual(fiveAccounts.accountListMaxHeight, 266)
+        XCTAssertEqual(fiveAccounts.accountListMaxHeight, 298)
         XCTAssertEqual(fiveAccounts.footerText, "5 accounts")
     }
 
@@ -212,11 +212,27 @@ final class StatusViewModelTests: XCTestCase {
 
         let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now)
 
-        XCTAssertEqual(viewModel.accounts[0].usage?.text, "5h 58% · 1w 60%")
+        // No resetsAt: window lines show only percentage, no date/time.
+        let acc0Windows = viewModel.accounts[0].usage?.windows ?? []
+        XCTAssertEqual(acc0Windows.count, 2)
+        XCTAssertEqual(acc0Windows[0].id, "5h")
+        XCTAssertEqual(acc0Windows[0].text, "5h 58%")
+        XCTAssertEqual(acc0Windows[0].colorToken, .textSecondary)
+        XCTAssertEqual(acc0Windows[1].id, "1w")
+        XCTAssertEqual(acc0Windows[1].text, "1w 60%")
+        XCTAssertEqual(acc0Windows[1].colorToken, .textSecondary)
         XCTAssertEqual(viewModel.accounts[0].usage?.kind, .loaded)
         XCTAssertFalse(viewModel.accounts[0].usage?.hasLowRemaining ?? true)
         XCTAssertEqual(viewModel.accounts[0].usage?.colorToken, .textSecondary)
-        XCTAssertEqual(viewModel.accounts[1].usage?.text, "5h 10% · 1w 30%")
+
+        let acc1Windows = viewModel.accounts[1].usage?.windows ?? []
+        XCTAssertEqual(acc1Windows.count, 2)
+        XCTAssertEqual(acc1Windows[0].id, "5h")
+        XCTAssertEqual(acc1Windows[0].text, "5h 10%")
+        XCTAssertEqual(acc1Windows[0].colorToken, .danger)
+        XCTAssertEqual(acc1Windows[1].id, "1w")
+        XCTAssertEqual(acc1Windows[1].text, "1w 30%")
+        XCTAssertEqual(acc1Windows[1].colorToken, .textSecondary)
         XCTAssertTrue(viewModel.accounts[1].usage?.hasLowRemaining ?? false)
         XCTAssertEqual(viewModel.accounts[1].usage?.colorToken, .danger, "low-balance usage must render red")
     }
@@ -266,6 +282,150 @@ final class StatusViewModelTests: XCTestCase {
             viewModel.accounts[0].usage?.detail,
             "Five-hour: 10% remaining, resets in 2h · Weekly: 16% remaining, resets in 4d"
         )
+    }
+
+    // MARK: - Reset date/time inline display
+
+    private let utc = TimeZone(identifier: "UTC")!
+
+    /// now is Tue 2023-11-14 22:13:20 UTC; fiveHour resetsAt +7200 = Wed 00:13 UTC;
+    /// weekly resetsAt +345600 = Sat 22:13 UTC.
+    func testUsageWindowLinesShowResetDateTimeInlineInUTC() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 42, remainingPercent: 58, windowSeconds: 18_000,
+                                            resetsAt: now.addingTimeInterval(7_200)),
+            weekly: SwitcherooUsageWindow(usedPercent: 40, remainingPercent: 60, windowSeconds: 604_800,
+                                          resetsAt: now.addingTimeInterval(4 * 86_400)),
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now, timeZone: utc)
+        let windows = viewModel.accounts[0].usage?.windows ?? []
+
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows[0].id, "5h")
+        XCTAssertEqual(windows[0].text, "5h 58% — resets Wed 12:13 AM")
+        XCTAssertEqual(windows[0].colorToken, .textSecondary)
+        XCTAssertEqual(windows[1].id, "1w")
+        XCTAssertEqual(windows[1].text, "1w 60% — resets Sat 10:13 PM")
+        XCTAssertEqual(windows[1].colorToken, .textSecondary)
+    }
+
+    func testSingleWindowFiveHourOnlyShowsOneLineWithReset() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 42, remainingPercent: 58, windowSeconds: 18_000,
+                                            resetsAt: now.addingTimeInterval(7_200)),
+            weekly: nil,
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now, timeZone: utc)
+        let windows = viewModel.accounts[0].usage?.windows ?? []
+
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows[0].id, "5h")
+        XCTAssertEqual(windows[0].text, "5h 58% — resets Wed 12:13 AM")
+        XCTAssertEqual(windows[0].colorToken, .textSecondary)
+    }
+
+    func testSingleWindowWeeklyOnlyShowsOneLineWithReset() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: nil,
+            weekly: SwitcherooUsageWindow(usedPercent: 40, remainingPercent: 60, windowSeconds: 604_800,
+                                          resetsAt: now.addingTimeInterval(4 * 86_400)),
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now, timeZone: utc)
+        let windows = viewModel.accounts[0].usage?.windows ?? []
+
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows[0].id, "1w")
+        XCTAssertEqual(windows[0].text, "1w 60% — resets Sat 10:13 PM")
+        XCTAssertEqual(windows[0].colorToken, .textSecondary)
+    }
+
+    func testMissingResetAtShowsPercentageWithoutDateTime() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 42, remainingPercent: 58, windowSeconds: 18_000, resetsAt: nil),
+            weekly: SwitcherooUsageWindow(usedPercent: 40, remainingPercent: 60, windowSeconds: 604_800, resetsAt: nil),
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now)
+        let windows = viewModel.accounts[0].usage?.windows ?? []
+
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows[0].text, "5h 58%")
+        XCTAssertEqual(windows[1].text, "1w 60%")
+    }
+
+    func testMixedMissingResetShowsDateTimeOnlyForWindowsThatHaveIt() {
+        let active = makeAccount(id: "acc-1", name: "Primary")
+        let usage = SwitcherooAccountUsage(
+            accountId: "acc-1",
+            fiveHour: SwitcherooUsageWindow(usedPercent: 42, remainingPercent: 58, windowSeconds: 18_000,
+                                            resetsAt: now.addingTimeInterval(7_200)),
+            weekly: SwitcherooUsageWindow(usedPercent: 40, remainingPercent: 60, windowSeconds: 604_800, resetsAt: nil),
+            fetchedAt: now
+        )
+        let state = SwitcherooAppState(
+            accounts: [active],
+            activeAccountId: active.id,
+            usageStatesByAccountId: [active.id: .loaded(usage)]
+        )
+
+        let viewModel = StatusViewModel(state: state, renameDraftAccountId: nil, now: now, timeZone: utc)
+        let windows = viewModel.accounts[0].usage?.windows ?? []
+
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows[0].id, "5h")
+        XCTAssertEqual(windows[0].text, "5h 58% — resets Wed 12:13 AM")
+        XCTAssertEqual(windows[1].id, "1w")
+        XCTAssertEqual(windows[1].text, "1w 60%")
+    }
+
+    func testFormattedDateTimeUsesPOSIXLocale() {
+        // The en_US_POSIX locale guarantees "AM"/"PM" uppercase,
+        // abbreviated weekday, and no locale-specific substitutions.
+        let date = Date(timeIntervalSince1970: 1_700_007_200) // Wed 00:13:20 UTC
+        let result = StatusViewModel.UsageDisplay.formattedDateTime(date, timeZone: utc)
+        XCTAssertEqual(result, "Wed 12:13 AM")
+    }
+
+    func testAccountRowHeightAccommodatesTwoUsageLines() {
+        // Row must be tall enough for: name + email/expiry row + up to 2 usage
+        // window lines without clipping.
+        XCTAssertGreaterThanOrEqual(StatusViewModel.accountRowHeight, 64,
+                                     "row height must accommodate two inline usage lines")
     }
 
     func testUsageDisplayNotRequestedHidesLine() {
