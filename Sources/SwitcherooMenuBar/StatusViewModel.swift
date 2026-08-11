@@ -5,7 +5,7 @@ import SwitcherooPresentation
 
 struct StatusViewModel: Equatable, Sendable {
     static let popoverWidth: CGFloat = 300
-    static let accountRowHeight: CGFloat = 58
+    static let accountRowHeight: CGFloat = 66
     static let accountRowSpacing: CGFloat = 6
     static let accountListVerticalPadding: CGFloat = 16
 
@@ -21,7 +21,7 @@ struct StatusViewModel: Equatable, Sendable {
     let footerText: String
     let accountListMaxHeight: CGFloat
 
-    init(state: SwitcherooAppState, renameDraftAccountId: String?, statusMessage: String? = nil, now: Date) {
+    init(state: SwitcherooAppState, renameDraftAccountId: String?, statusMessage: String? = nil, now: Date, timeZone: TimeZone = .current) {
         self.title = "Switcheroo"
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         self.versionText = "v\(version ?? "0.0.0")"
@@ -46,7 +46,8 @@ struct StatusViewModel: Equatable, Sendable {
                 },
                 usage: UsageDisplay.make(
                     state: state.usageStatesByAccountId[account.id] ?? .notRequested,
-                    now: now
+                    now: now,
+                    timeZone: timeZone
                 ),
                 showSwitchAction: state.activeAccountId != account.id
             )
@@ -121,7 +122,9 @@ struct StatusViewModel: Equatable, Sendable {
         let showSwitchAction: Bool
     }
 
-    /// Concise usage line shown under the active account row.
+    /// Usage information shown under each account row. Each applicable
+    /// usage window (five-hour, weekly) renders its own compact line with
+    /// the remaining percentage and the reset date/time visible inline.
     struct UsageDisplay: Equatable, Sendable {
         enum Kind: Equatable, Sendable {
             case loaded
@@ -139,16 +142,29 @@ struct StatusViewModel: Equatable, Sendable {
             case danger
         }
 
-        let text: String
+        /// One window line rendered directly in the dropdown.
+        struct WindowLine: Identifiable, Equatable, Sendable {
+            /// Stable identifier for SwiftUI iteration: the window label ("5h" / "1w").
+            public let id: String
+            /// Compact line text: e.g. "5h 58% — resets Mon 3:15 PM"
+            public let text: String
+            /// Per-window color: danger when that window is below 25% remaining.
+            public let colorToken: ColorToken
+        }
+
         let kind: Kind
+        /// Per-window lines rendered inline in the dropdown; the reset
+        /// date/time is visible in each line without requiring a hover.
+        let windows: [WindowLine]
+        /// One-line summary for non-loaded states (loading / unavailable).
+        let text: String
         /// Tooltip detail: reset timing for loaded usage, or the (secret-free)
         /// reason for unavailable usage.
         let detail: String?
         /// True when any window has less than 25% remaining.
         let hasLowRemaining: Bool
 
-        /// Low-balance usage information is styled red (danger) to stand out
-        /// from the neutral secondary text and the orange unavailable hint.
+        /// Aggregate color for the legacy single-line path (loading / unavailable).
         var colorToken: ColorToken {
             switch kind {
             case .loaded:
@@ -162,37 +178,63 @@ struct StatusViewModel: Equatable, Sendable {
 
         private static let lowRemainingThreshold = 25.0
 
-        static func make(state: SwitcherooAccountUsageState, now: Date) -> UsageDisplay? {
+        static func make(state: SwitcherooAccountUsageState, now: Date, timeZone: TimeZone = .current) -> UsageDisplay? {
             switch state {
             case .notRequested:
                 return nil
             case .loading:
-                return UsageDisplay(text: "Checking usage…", kind: .loading, detail: nil, hasLowRemaining: false)
+                return UsageDisplay(
+                    kind: .loading,
+                    windows: [],
+                    text: "Checking usage…",
+                    detail: nil,
+                    hasLowRemaining: false
+                )
             case .unavailable(let reason):
                 return UsageDisplay(
-                    text: "Usage unavailable",
                     kind: .unavailable,
+                    windows: [],
+                    text: "Usage unavailable",
                     detail: reason,
                     hasLowRemaining: false
                 )
             case .loaded(let usage):
-                let fiveHour = usage.fiveHour.map { Self.formatWindow(label: "5h", window: $0) }
-                let weekly = usage.weekly.map { Self.formatWindow(label: "1w", window: $0) }
-                let parts = [fiveHour, weekly].compactMap { $0 }
-                guard !parts.isEmpty else { return nil }
-                let lowRemaining = (usage.fiveHour?.remainingPercent ?? 100) < Self.lowRemainingThreshold
-                    || (usage.weekly?.remainingPercent ?? 100) < Self.lowRemainingThreshold
+                let fiveHourLine = usage.fiveHour.map {
+                    WindowLine(
+                        id: "5h",
+                        text: Self.windowLineText(label: "5h", window: $0, now: now, timeZone: timeZone),
+                        colorToken: $0.remainingPercent < lowRemainingThreshold ? .danger : .textSecondary
+                    )
+                }
+                let weeklyLine = usage.weekly.map {
+                    WindowLine(
+                        id: "1w",
+                        text: Self.windowLineText(label: "1w", window: $0, now: now, timeZone: timeZone),
+                        colorToken: $0.remainingPercent < lowRemainingThreshold ? .danger : .textSecondary
+                    )
+                }
+                let windowLines = [fiveHourLine, weeklyLine].compactMap { $0 }
+                guard !windowLines.isEmpty else { return nil }
+                let lowRemaining = (usage.fiveHour?.remainingPercent ?? 100) < lowRemainingThreshold
+                    || (usage.weekly?.remainingPercent ?? 100) < lowRemainingThreshold
                 return UsageDisplay(
-                    text: parts.joined(separator: " · "),
                     kind: .loaded,
+                    windows: windowLines,
+                    text: windowLines.map(\.text).joined(separator: "\n"),
                     detail: Self.detailText(fiveHour: usage.fiveHour, weekly: usage.weekly, now: now),
                     hasLowRemaining: lowRemaining
                 )
             }
         }
 
-        private static func formatWindow(label: String, window: SwitcherooUsageWindow) -> String {
-            "\(label) \(Self.percent(window.remainingPercent))"
+        /// Builds one compact window line: "5h 58% — resets Mon 3:15 PM".
+        /// When `resetsAt` is nil the reset portion is omitted.
+        private static func windowLineText(label: String, window: SwitcherooUsageWindow, now: Date, timeZone: TimeZone) -> String {
+            var text = "\(label) \(percent(window.remainingPercent))"
+            if let resetsAt = window.resetsAt {
+                text += " — resets \(Self.formattedDateTime(resetsAt, timeZone: timeZone))"
+            }
+            return text
         }
 
         private static func percent(_ value: Double) -> String {
@@ -210,12 +252,13 @@ struct StatusViewModel: Equatable, Sendable {
         private static func clause(label: String, window: SwitcherooUsageWindow, now: Date) -> String {
             var text = "\(label): \(percent(window.remainingPercent)) remaining"
             if let resetsAt = window.resetsAt {
-                text += ", resets \(Self.resetText(resetsAt: resetsAt, now: now))"
+                text += ", resets \(Self.relativeResetText(resetsAt: resetsAt, now: now))"
             }
             return text
         }
 
-        private static func resetText(resetsAt: Date, now: Date) -> String {
+        /// Relative reset description for tooltip detail (e.g. "in 2h").
+        private static func relativeResetText(resetsAt: Date, now: Date) -> String {
             let seconds = max(0, Int(resetsAt.timeIntervalSince(now)))
             if seconds < 60 { return "now" }
             let minutes = (seconds + 59) / 60
@@ -224,6 +267,17 @@ struct StatusViewModel: Equatable, Sendable {
             if hours < 24 { return "in \(hours)h" }
             let days = (hours + 23) / 24
             return "in \(days)d"
+        }
+
+        /// Formats a reset date/time in the user's local time zone.
+        /// Compact format: "Mon 3:15 PM" (day-of-week abbreviation + time).
+        /// Tests override the time zone to UTC for deterministic output.
+        static func formattedDateTime(_ date: Date, timeZone: TimeZone) -> String {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "EEE h:mm a"
+            return formatter.string(from: date)
         }
     }
 
